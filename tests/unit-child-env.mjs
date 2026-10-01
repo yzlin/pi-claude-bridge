@@ -17,6 +17,29 @@ describe("Claude Code child environment", () => {
 		});
 	});
 
+	it("drops exported Anthropic credentials and base URL unless opted in (issue #107)", () => {
+		const env = {
+			PATH: "/bin",
+			ANTHROPIC_API_KEY: "k",
+			ANTHROPIC_AUTH_TOKEN: "t",
+			ANTHROPIC_BASE_URL: "u",
+			ANTHROPIC_MODEL: "m",
+		};
+		const child = __test.claudeChildEnv({}, env);
+		assert.equal(child.PATH, "/bin");
+		assert.equal(child.ANTHROPIC_MODEL, "m");
+		assert.equal(child.DISABLE_AUTO_COMPACT, "1");
+		for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]) {
+			assert.equal(key in child, false, key);
+		}
+		assert.equal(env.ANTHROPIC_API_KEY, "k", "input env is not mutated");
+
+		const inherited = __test.claudeChildEnv({ inheritAnthropicEnv: true }, env);
+		assert.equal(inherited.ANTHROPIC_API_KEY, "k");
+		assert.equal(inherited.ANTHROPIC_AUTH_TOKEN, "t");
+		assert.equal(inherited.ANTHROPIC_BASE_URL, "u");
+	});
+
 	// Deliberately not asserted here: that every `query()` call site spreads the
 	// constant. The only way to check that from a unit test is to grep src/index.ts,
 	// which fails on innocent indirection (`env: childEnv`) and would have to be

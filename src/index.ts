@@ -52,6 +52,22 @@ const CC_CHILD_ENV = {
 	DISABLE_AUTO_COMPACT: "1",
 } as const;
 
+// A project's own ANTHROPIC_API_KEY (or a gateway token/URL) outranks the claude.ai
+// login in Claude Code, so an inherited one silently moves the bridge off the
+// subscription (issue #107). Users who mean it opt back in with
+// provider.inheritAnthropicEnv; Claude Code settings.json `env` still applies.
+const ANTHROPIC_ROUTING_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"] as const;
+
+function claudeChildEnv(provider: Config["provider"] = {}, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const child: NodeJS.ProcessEnv = { ...env, ...CC_CHILD_ENV };
+	if (!provider.inheritAnthropicEnv) {
+		for (const key of ANTHROPIC_ROUTING_ENV) {
+			delete child[key];
+		}
+	}
+	return child;
+}
+
 // Pi owns context files on the provider path, so Claude Code must not load its
 // own on top: otherwise project CLAUDE.md/AGENTS.md files arrive twice, and
 // ~/.claude/CLAUDE.md — a user persona written for a harness that is not the
@@ -595,7 +611,7 @@ async function runIsolatedSummary(
 		const effort = effortForReasoning(model, options?.reasoning);
 		debug(`compact summary: spawn model=${cliModel} registeredModel=${model.id} effort=${effort ?? "default"} promptLen=${promptText.length}`);
 
-		const cacheControls = summaryCacheControls({ ...process.env, ...CC_CHILD_ENV });
+		const cacheControls = summaryCacheControls(claudeChildEnv(compactProviderSettings));
 		sdkQuery = queryImpl({
 			prompt: promptText,
 			options: {
@@ -964,6 +980,7 @@ export const __test = {
 	drainForAbort,
 	CC_CHILD_ENV,
 	isOneOffSummary,
+	claudeChildEnv,
 	buildMcpServers,
 	streamClaudeAgentSdk,
 	get promptCaptures() {
@@ -2160,7 +2177,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// threshold with CC's, including CC's anti-thrashing guard (issue #8).
 	// Manual /compact in CC still works (we never invoke it).
 	const cacheRetention = resolvePiCacheRetention(options);
-	const cacheControls = providerCacheControls({ ...process.env, ...CC_CHILD_ENV }, cacheRetention);
+	const cacheControls = providerCacheControls(claudeChildEnv(providerSettings), cacheRetention);
 	const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
 		cwd,
 		env: cacheControls.env,
@@ -2507,7 +2524,7 @@ async function promptAndWait(
 		prompt,
 		options: {
 			cwd,
-			env: { ...process.env, ...CC_CHILD_ENV },
+			env: claudeChildEnv(providerSettings),
 			permissionMode: "bypassPermissions",
 			settings: { ...claudeCodeSettings(providerSettings), claudeMdExcludes: CLAUDE_MD_EXCLUDES },
 			skills: [],
