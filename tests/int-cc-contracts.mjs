@@ -28,11 +28,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -528,6 +528,47 @@ test("--thinking-display summarized is still an accepted flag value", { timeout:
 	}));
 	assert.equal(result?.subtype, "success", `CC rejected --thinking-display summarized: ${JSON.stringify(result)}`);
 });
+
+// --- Cache-warming SDK replay (stub API only; no subscription/API usage) ---
+
+for (const mode of ["normal", "truncated", "budget"]) {
+	const truncated = mode === "truncated";
+	const budget = mode === "budget";
+	test(`cache-warming SDK replay: ${budget ? "budget stops truncation with per-request usage" : truncated ? "max_tokens recovery exceeds one request" : "isolated replay and cancellation"}`, { timeout: 90_000 }, () => {
+		const child = spawnSync(process.execPath, ["diag/probe-cache-warming.mjs", ...(budget ? ["--stub-budget"] : truncated ? ["--stub-max-tokens"] : [])], {
+			cwd: CWD, encoding: "utf8", timeout: 60_000,
+		});
+		assert.equal(child.error, undefined);
+		assert.equal(child.status, truncated ? 1 : 0, child.stderr);
+		const summary = JSON.parse(child.stdout.trim());
+		try {
+			const report = JSON.parse(readFileSync(summary.report, "utf8"));
+			assert.equal(report.toolAttempts, 0);
+			assert.ok(report.checks.some((check) => check.includes("source transcript unchanged; no new transcript")));
+			if (truncated) {
+				assert.equal(report.status, "blocked");
+				assert.equal(report.sdkQueries, 2);
+				assert.equal(report.failure, "unexpected additional API request in one SDK query");
+				assert.deepEqual(report.rejectedRequests, [{ label: "seed-refresh", maxTokens: 1, sameModel: true, sameSyntheticPrefix: true }]);
+			} else {
+				assert.equal(report.status, "passed");
+				assert.equal(report.sdkQueries, 3);
+				assert.deepEqual(report.rejectedRequests, []);
+				assert.equal(report.cancellation.signalAborted, true);
+				assert.equal(report.cancellation.mentionsAbort, true);
+				if (budget) {
+					const refresh = report.requests.find((r) => r.label === "seed-refresh");
+					assert.equal(refresh.sdkResult, "error_max_budget_usd");
+					assert.equal(refresh.sdkStopReason, "max_tokens");
+					assert.deepEqual(refresh.sdkUsage, { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+					assert.deepEqual(report.sdkErrors.map((error) => error.label), ["cancel"]);
+				}
+			}
+		} finally {
+			rmSync(dirname(summary.report), { recursive: true, force: true });
+		}
+	});
+}
 
 // --- Captured request contracts ---
 

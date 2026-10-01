@@ -7,3 +7,10 @@ eli/
 capture-out.jsonl
 prompt-too-long-fable.jsonl
 AGENTS.override.md
+
+# Local agent runtime state; keep project rules, skills and workflows trackable.
+/.pi/tasks/
+
+# Generated diagnostic approvals and run evidence; keep source, tests and docs.
+/diag/*.approved.json
+/diag/*.live/

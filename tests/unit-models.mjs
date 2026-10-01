@@ -39,6 +39,7 @@ describe("MODELS projection", () => {
 			assert.equal(m.provider, undefined);
 			assert.equal(m.headers, undefined);
 			assert.deepEqual(m.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+			assert.deepEqual(m.promptCache, { short: 300, long: 3600 });
 		}
 		// Spot-check coverage of every current family.
 		assert.ok(find(models, "claude-opus-5"), "opus-5 present");

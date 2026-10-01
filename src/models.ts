@@ -51,6 +51,7 @@ export function buildModels<T extends { id: string; [key: string]: any }>(piAiMo
 			name,
 			reasoning, input, contextWindow, maxTokens,
 			thinkingLevelMap,
+			promptCache: { short: 300, long: 3600 },
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		}));
 }

@@ -1,11 +1,11 @@
 import { createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEventStream, type Context, type ImageContent, type Model, type SimpleStreamOptions, type TextContent, type Tool, type UserMessage } from "@earendil-works/pi-ai";
 import { getModels } from "@earendil-works/pi-ai/compat";
 import { buildSessionContext, keyHint, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { query, type EffortLevel, type SDKMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
+import { query, resolveSettings, type EffortLevel, type SDKMessage, type SettingSource, type Settings } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { Text } from "@earendil-works/pi-tui";
 import { createSession, deleteSession, openSession, repairToolPairing } from "cc-session-io";
-import { appendFileSync, mkdirSync, realpathSync, statSync } from "fs";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { PROVIDER_ID, messageContentToText, convertPiMessages } from "./convert.js";
 import { debugLogPath, diagLogPath } from "./log-paths.js";
@@ -30,6 +30,8 @@ import { nonSystemMessages, toBridgeContext } from "./transcript.js";
 import { forgetSessionCwd, rememberSessionCwd, rememberSummarySession, sessionCwdFor, summarySessionFor } from "./session-cwd.js";
 import { updateUsage, type SdkUsage } from "./usage.js";
 import { rateLimitResponse } from "./rate-limit.js";
+import { providerCacheControls, providerThinkingOptions, resolvePiCacheRetention, summaryCacheControls, type CacheControls } from "./cache-policy.js";
+import { accountEvidence, selectModelUsage, WARMING_SDK_VERSION, nativeWarmingDecision, warmingRuntime, warmingControlsFingerprint, captureWarmingRequest, CacheWarmingCoordinator, PRODUCTION_QUALIFIED_WARMING_MODELS, isWarmingCandidate, type RuntimeSettings, type WarmingEvidence } from "./cache-warming.js";
 
 // --- Debug logging ---
 // CLAUDE_BRIDGE_DEBUG=1 enables debug logging to the bridge log in pi's agent
@@ -123,6 +125,10 @@ function diagDump(label: string, data: Record<string, unknown>) {
 // Full registration policy (first vs later instances, shared vs own registry):
 // see the "--- Provider ---" block in activate() below.
 const ACTIVE_STREAM_SIMPLE_KEY = Symbol.for("claude-bridge:activeStreamSimple");
+const CACHE_WARMING_COORDINATOR_KEY = Symbol.for("claude-bridge:cacheWarmingCoordinator");
+const globalState = globalThis as Record<symbol, any>;
+const cacheWarming: CacheWarmingCoordinator = globalState[CACHE_WARMING_COORDINATOR_KEY]
+	??= new CacheWarmingCoordinator({ qualified: PRODUCTION_QUALIFIED_WARMING_MODELS });
 
 // Claude Code's own builtin tools, for the AskClaude path where CC really runs
 // them. The provider path never sees these — it starts CC with `tools: []`.
@@ -542,6 +548,17 @@ async function reportHeldRateLimit(c: QueryContext, model: Model<any>): Promise<
 	}
 }
 
+// Pi's completeSummarization (compaction, branch summary, turn prefix, /bug, and
+// extension summarizers) marks every call cacheRetention:"none" with one user
+// message and no tools. cacheRetention alone is also a retention policy for
+// ordinary turns, which carry tools or history and must stay on the managed path.
+function isOneOffSummary(context: Context, options?: SimpleStreamOptions): boolean {
+	return options?.cacheRetention === "none"
+		&& !context.tools?.length
+		&& context.messages.length === 1
+		&& context.messages[0]?.role === "user";
+}
+
 function isolatedStreamFn(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
 	void runIsolatedSummary(model, context, options, stream);
@@ -568,16 +585,8 @@ async function runIsolatedSummary(
 	};
 
 	try {
-		// One-off summarizer calls (compaction, branch summary, turn prefix, bug report —
-		// anything routed through pi's completeSummarization) are marked cacheRetention:
-		// "none". Any of them may appear in a future pi release without a bridge change,
-		// so route on the marker, not on which summarizer is calling. Non-summarizer calls
-		// must still match the [system,user] compaction shape exactly.
-		const isOneOffSummary = options?.cacheRetention === "none";
-		const promptText = isOneOffSummary
-			? extractUserPrompt(context.messages)
-			: extractIsolatedSummaryPrompt(context.messages);
-		if (!promptText) throw new Error("runIsolatedSummary: one-off summary without a user prompt (last message is not user?)");
+		// isOneOffSummary admits only one user message after transcript restoration.
+		const promptText = extractIsolatedSummaryPrompt(context.messages);
 		const cwd = sessionCwdFor(summarySessionFor(options?.signal) ?? options?.sessionId);
 		const compactProviderSettings = loadConfig(cwd).provider;
 		const claudeExecutable = compactProviderSettings?.pathToClaudeCodeExecutable;
@@ -586,12 +595,13 @@ async function runIsolatedSummary(
 		const effort = effortForReasoning(model, options?.reasoning);
 		debug(`compact summary: spawn model=${cliModel} registeredModel=${model.id} effort=${effort ?? "default"} promptLen=${promptText.length}`);
 
+		const cacheControls = summaryCacheControls({ ...process.env, ...CC_CHILD_ENV });
 		sdkQuery = queryImpl({
 			prompt: promptText,
 			options: {
 				cwd,
-				env: { ...process.env, ...CC_CHILD_ENV },
-				settings: { autoMemoryEnabled: false },
+				env: cacheControls.env,
+				settings: { autoMemoryEnabled: false, ...cacheControls.settings },
 				tools: [],
 				strictMcpConfig: true,
 				settingSources: [] as SettingSource[],
@@ -668,6 +678,8 @@ async function runIsolatedSummary(
 interface SyncResult {
 	sessionId: string | null;
 	preserveSharedSession?: boolean;
+	/** History was re-imported, even if the SDK session UUID was retained. */
+	rebuilt?: boolean;
 }
 
 /**
@@ -849,7 +861,56 @@ function debugSessionPaths(label: string, cwd: string, jsonlPath: string): void 
 	}
 	debugSessionPaths(`${session.sessionId.slice(0, 8)}`, cwd, session.jsonlPath);
 	debug(`syncResult: path=rebuild sessionId=${session.sessionId} priors=${priorMessages.length} ${previousSessionId === undefined ? "first" : preserveId ? "preserved" : "rotated-post-abort"}`);
-	return { sessionId: session.sessionId };
+	return { sessionId: session.sessionId, rebuilt: true };
+}
+
+// Plugins are Claude Code's own extensions (skills, agents, commands, hooks, MCP);
+// Pi supplies those. Flag settings can only switch plugins off by id, and query
+// setup is synchronous, so ids come from earlier public resolves for the cwd
+// (session start, then every query). A plugin enabled mid-session loads for one
+// turn. Ids accumulate so a later resolve never re-enables one; policy still wins.
+// CLI built-ins never appear in settings: CLI 2.1.285 loads cc-plugin-agents-md
+// by default, which injects AGENTS.md past claudeMdExcludes, and only its exact
+// @builtin id switches it off. Other built-ins are learned from each query's init.
+const BUILTIN_PLUGIN_IDS = ["cc-plugin-agents-md@builtin"];
+const knownPluginIds = new Map<string, Set<string>>();
+function addPluginIds(cwd: string, ids: string[]): void {
+	if (!ids.length) return;
+	const known = knownPluginIds.get(cwd) ?? new Set<string>();
+	for (const id of ids) known.add(id);
+	knownPluginIds.set(cwd, known);
+}
+function rememberPluginIds(cwd: string, effective: { enabledPlugins?: Record<string, unknown> } | undefined): void {
+	addPluginIds(cwd, Object.keys(effective?.enabledPlugins ?? {}));
+}
+function rememberInitPlugins(cwd: string, plugins: readonly unknown[] | undefined): void {
+	addPluginIds(cwd, (plugins ?? []).flatMap(p => {
+		const source = (p as { source?: unknown } | null)?.source;
+		return typeof source === "string" && source ? [source] : [];
+	}));
+}
+function pluginIdsFor(cwd: string): string[] {
+	return [...new Set([...BUILTIN_PLUGIN_IDS, ...knownPluginIds.get(cwd) ?? []])].sort();
+}
+function primePluginIds(cwd: string): void {
+	Promise.resolve().then(() => resolveSettings({ cwd }))
+		.then((resolved) => rememberPluginIds(cwd, resolved.effective as { enabledPlugins?: Record<string, unknown> }))
+		.catch(() => debug("provider: plugin ids unavailable"));
+}
+
+function providerQuerySettings(settings: Settings, cache: CacheControls["settings"], pluginIds: string[] = []): Settings {
+	return {
+		...settings,
+		...(pluginIds.length ? { enabledPlugins: Object.fromEntries(pluginIds.map(id => [id, false])) } : {}),
+		claudeMdExcludes: CLAUDE_MD_EXCLUDES,
+		includeGitInstructions: false,
+		// Pi owns the turn and its tools. Settings-file and plugin hooks (and
+		// statusLine) would fire on every bridged request; managed hooks still run.
+		disableAllHooks: true,
+		...cache,
+		// Preserve explicitly supplied non-cache settings; never copy inherited env here.
+		env: { ...settings.env, ...cache.env },
+	};
 }
 
 // The SDK's query(), or a test double (see setQuery).
@@ -857,6 +918,11 @@ let queryImpl: typeof query = query;
 
 // @internal
 export const __test = {
+	providerQuerySettings,
+	rememberPluginIds,
+	rememberInitPlugins,
+	pluginIdsFor,
+	resetPluginIds() { knownPluginIds.clear(); },
 	setQuery(fn: typeof query | null) {
 		queryImpl = fn ?? query;
 	},
@@ -892,11 +958,14 @@ export const __test = {
 	extractUserPromptBlocks,
 	consumeQuery,
 	finalizeCurrentStream,
+	completeProviderTurn,
 	resultErrorText,
 	deliverToolResults,
 	drainForAbort,
 	CC_CHILD_ENV,
+	isOneOffSummary,
 	buildMcpServers,
+	streamClaudeAgentSdk,
 	get promptCaptures() {
 		return promptCaptures;
 	},
@@ -1483,8 +1552,12 @@ async function consumeQuery(
 	model: Model<any>,
 	wasAborted: () => boolean,
 	queryCtx: QueryContext,
-): Promise<{ capturedSessionId?: string }> {
+	cliModel?: string,
+): Promise<{ capturedSessionId?: string; init?: WarmingEvidence["init"]; usage?: WarmingEvidence["usage"]; servedModel?: string }> {
 	let capturedSessionId: string | undefined;
+	let init: WarmingEvidence["init"] | undefined;
+	let usage: WarmingEvidence["usage"] | undefined;
+	let servedModel: string | undefined;
 
 	for await (const message of sdkQuery) {
 		// CLAUDE_BRIDGE_RECORD_STREAM=<path> appends every SDK message consumeQuery
@@ -1507,10 +1580,14 @@ async function consumeQuery(
 		//   ended empty.
 		// - rate-limit events: notifications to the user, which are most likely to
 		//   fire during exactly the long tool-using turns the guard was skipping.
+		if (message.type === "stream_event" && message.event.type === "message_start") servedModel = message.event.message.model;
+		if (message.type === "assistant") servedModel = message.message.model;
 		let resultError: string | undefined;
 		if (message.type === "result") {
 			queryCtx.promptStream?.end();
 			logServedContextWindow("result", message, model);
+			const rows = message.modelUsage;
+			usage = selectModelUsage(rows, servedModel, cliModel);
 			resultError = resultErrorText(message);
 			if (resultError !== undefined) {
 				// Consume the rejection alongside the failure it caused, so a later
@@ -1585,8 +1662,17 @@ async function consumeQuery(
 				break;
 			}
 			case "system":
-				if ((message as any).subtype === "init" && (message as any).session_id) {
-					capturedSessionId = (message as any).session_id;
+				if (message.subtype === "init") {
+					if (message.session_id) capturedSessionId = message.session_id;
+					debug(`provider: init plugins=${message.plugins?.length ?? 0}`, JSON.stringify((message.plugins ?? []).map(p => p.name)),
+						`tools=${JSON.stringify(message.tools ?? [])} mcp=${JSON.stringify((message.mcp_servers ?? []).map(s => `${s.name}:${s.status}`))} apiKeySource=${message.apiKeySource}`);
+					init = {
+						claude_code_version: message.claude_code_version,
+						apiKeySource: message.apiKeySource,
+						tools: message.tools,
+						mcp_servers: message.mcp_servers,
+						plugins: message.plugins,
+					};
 				}
 				break;
 			case "user":
@@ -1606,7 +1692,7 @@ async function consumeQuery(
 	// DEBUG: trace when consumeQuery exits
 	debug(`consumeQuery: for-await loop exited, wasAborted=${wasAborted()}, capturedSessionId=${capturedSessionId?.slice(0, 8) ?? "none"}`);
 
-	return { capturedSessionId };
+	return { capturedSessionId, init, usage, servedModel };
 }
 
 /** The trailing user turn as content blocks, or null if there isn't one.
@@ -1761,20 +1847,60 @@ function discardRewrittenQuery(c: QueryContext): void {
 	debug("provider: history rewritten under a parked query — discarded it, rebuilding from current history");
 }
 
+/** Isolate optional maintenance bookkeeping from the ordinary success path. */
+async function completeProviderTurn(c: QueryContext, publish: () => Promise<void>, release?: () => void): Promise<void> {
+	try { await publish(); } catch { debug("cache-warming: snapshot publication unavailable"); }
+	release?.();
+	finalizeCurrentStream(c, c.turnOutput?.stopReason);
+}
+
+function warmingTerminalStream(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+	const stream = createAssistantMessageEventStream();
+	void cacheWarming.intercept(model, context, options, streamClaudeAgentSdk,
+		() => cacheWarming.snapshot()?.controlsFingerprint === warmingControlsFingerprint({ providerSettings, longContextSettings })).then((result) => {
+		const c = new QueryContext();
+		c.resetTurnState(model);
+		if (result.ok) {
+			Object.assign(c.turnOutput!.usage, result.usage, {
+				totalTokens: result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite,
+			});
+			stream.push({ type: "done", reason: "stop", message: c.turnOutput! });
+		} else {
+			c.turnOutput!.stopReason = options?.signal?.aborted ? "aborted" : "error";
+			c.turnOutput!.errorMessage = `Cache refresh refused: ${"reason" in result ? result.reason : "invalid result"}`;
+			stream.push({ type: "error", reason: c.turnOutput!.stopReason as "aborted" | "error", error: c.turnOutput! });
+		}
+		stream.end();
+	}).catch(() => {
+		const c = new QueryContext(); c.resetTurnState(model);
+		c.turnOutput!.stopReason = "error";
+		c.turnOutput!.errorMessage = "Cache refresh failed: internal maintenance error";
+		stream.push({ type: "error", reason: "error", error: c.turnOutput! });
+		stream.end();
+	});
+	return stream;
+}
+
 /** Provider entry point. Pi calls this for each new prompt and each tool result.
  *  Two cases: tool result delivery (active query) or fresh query. */
 function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+	// Reserved candidates are classified before notices, transcript normalization,
+	// shared-session synchronization, or tool-result delivery. They never fall through.
+	if (isWarmingCandidate(options)) return warmingTerminalStream(model, context, options);
+	const warmingRequest = captureWarmingRequest(context, options, model);
+	const controlsFingerprint = warmingControlsFingerprint({ providerSettings, longContextSettings });
+	const processFingerprint = warmingControlsFingerprint(undefined);
 	showStartupNoticeOnce();
 	// pi hands providers a transcript (prompt/tools folded into system messages) — fold it
 	// back out to the prompt/tools fields every cursor write, syncSharedSession call and
 	// prompt-capture lookup below assumes (issue #106).
-	context = toBridgeContext(context);
+	context = toBridgeContext(warmingRequest?.context ?? context);
 
-	// Pi's compaction, branch-summary and bug-report calls use cacheRetention:"none"
-	// in completeSummarization. Their prompts bypass the capture boundaries, so route
-	// them to an isolated persistSession:false CC process without session sync.
-	if (options?.cacheRetention === "none") {
-		debug(`provider: one-off summarizer call (cacheRetention none) routed to isolated summary, msgs=${context.messages.length}`);
+	// Pi's one-off summaries bypass the capture boundaries, so route them to an isolated
+	// persistSession:false CC process without session sync. Uncached ordinary turns keep
+	// their managed history and tools (see isOneOffSummary).
+	if (isOneOffSummary(context, options)) {
+		debug(`provider: one-off summarizer call routed to isolated summary, msgs=${context.messages.length}`);
 		return isolatedStreamFn(model, context, options);
 	}
 
@@ -1812,6 +1938,9 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// (everything after the last assistant message) and match against waiting MCP
 	// handlers. Results that arrive before their handler get queued in pendingResults.
 	if (resultCtx) {
+		// Keep the same generation, but advance the immutable candidate input to the
+		// final Pi context after each continuation callback.
+		resultCtx.warmingRequest = warmingRequest;
 		claimCurrentPiStream(stream, "tool-result", resultCtx, options);
 		resultCtx.resetTurnState(model);
 		// A rewrite that armed the mark after this query parked gets copied here,
@@ -1878,6 +2007,8 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	//    background subagents can run concurrently with the parent query.
 	const isReentrant = activeQuery;
 	const queryCtx = isReentrant ? new QueryContext() : ctx();
+	const warmingGeneration = cacheWarming.begin(streamClaudeAgentSdk);
+	queryCtx.warmingRequest = warmingRequest;
 	debug(`provider: fresh query setup, isReentrant=${isReentrant}, activeContexts=${activeQueryContexts.size}`);
 
 	// Resolved first: an unaccountable system prompt fails this query before anything
@@ -2028,10 +2159,11 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// also autocompact would double-flush the prompt cache and races pi's
 	// threshold with CC's, including CC's anti-thrashing guard (issue #8).
 	// Manual /compact in CC still works (we never invoke it).
-	const childEnv = { ...process.env, ...CC_CHILD_ENV };
+	const cacheRetention = resolvePiCacheRetention(options);
+	const cacheControls = providerCacheControls({ ...process.env, ...CC_CHILD_ENV }, cacheRetention);
 	const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
 		cwd,
-		env: childEnv,
+		env: cacheControls.env,
 		tools: [],
 		permissionMode: "bypassPermissions",
 		includePartialMessages: true,
@@ -2044,32 +2176,47 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		// CC's git-workflow guidance from its Bash tool prompt, but the provider
 		// path runs CC with `tools: []`, so those definitions never ship.
 		// AskClaude keeps CC's native tools and its guidance — unaffected.
-		settings: {
-			...claudeCodeSettings(providerSettings),
-			claudeMdExcludes: CLAUDE_MD_EXCLUDES,
-			includeGitInstructions: false,
-		},
+		settings: providerQuerySettings(claudeCodeSettings(providerSettings), cacheControls.settings, pluginIdsFor(cwd)),
 		systemPrompt: {
 			type: "preset", preset: "claude_code",
 			append: systemPromptAppend ? systemPromptAppend : undefined,
 		},
 		extraArgs,
-		...(effort ? { effort } : {}),
+		...providerThinkingOptions(options?.reasoning, effort),
+		// Pi owns user prompt composition; match the live-qualified 5.5 fork.
+		...(["claude-sonnet-5-5", "claude-opus-5-5[1m]"].includes(cliModel) ? { verbatimPrompts: true } : {}),
 		...(mcpServers ? { mcpServers } : {}),
 		...(resumeSessionId ? { resume: resumeSessionId } : {}),
 		...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
 		...makeCliDebugOptions("provider"),
 	};
 
+	const runtimeSettingsPromise: Promise<RuntimeSettings | undefined> = Promise.resolve().then(() => resolveSettings({ cwd, settingSources: queryOptions.settingSources }))
+		.then((resolved) => (rememberPluginIds(cwd, resolved.effective as { enabledPlugins?: Record<string, unknown> }), resolved))
+		.then((resolved) => warmingRuntime(resolved as RuntimeSettings,
+			typeof queryOptions.settings === "object" ? queryOptions.settings as Record<string, unknown> : undefined))
+		.catch(() => {
+			debug("cache-warming: effective settings unavailable");
+			return undefined;
+		});
+
 	debug("provider: fresh query",
 		`model=${cliModel} msgs=${context.messages.length} tools=${mcpTools.length}`,
-		`resume=${resumeSessionId?.slice(0, 8) ?? "none"} effort=${effort ?? "default"}`,
+		`resume=${resumeSessionId?.slice(0, 8) ?? "none"} effort=${effort ?? "off"} cache=${cacheRetention}`,
 		`ctxFiles=${promptCapture?.contextFiles.length ?? 0} strictMcp=${strictMcpConfigEnabled}`,
 		`prompt=${promptText.slice(0, 60)}${promptBlocks ? " [+images]" : ""}`);
 
 	// 3. Start SDK query and claim it for this context
 	let wasAborted = false;
 	const sdkQuery = queryImpl({ prompt: promptStream.stream, options: queryOptions });
+	const accountInfoPromise = Promise.resolve().then(() => sdkQuery.accountInfo()).then(accountEvidence).then(account => {
+		// Lane holds only provider/subscription/source categories; no identifiers.
+		debug(`cache-warming: account lane=${account.lane} eligible=${account.eligible}`);
+		return account;
+	}).catch(() => {
+		debug("cache-warming: account evidence unavailable");
+		return undefined;
+	});
 	queryCtx.activeQuery = sdkQuery;
 	activeQueryContexts.add(queryCtx);
 
@@ -2093,8 +2240,9 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	}
 
 	// Background consumer — runs until query ends
-	consumeQuery(sdkQuery, customToolNameToPi, model, () => wasAborted, queryCtx)
-		.then(async ({ capturedSessionId }) => {
+	consumeQuery(sdkQuery, customToolNameToPi, model, () => wasAborted, queryCtx, cliModel)
+		.then(async ({ capturedSessionId, init, usage, servedModel }) => {
+			rememberInitPlugins(cwd, init?.plugins);
 			debug(`provider: consumeQuery completed, stopReason=${queryCtx.turnOutput?.stopReason}, error=${queryCtx.turnOutput?.errorMessage}, aborted=${wasAborted}`);
 
 			// Discarded out from under: the query continuing the turn owns the context,
@@ -2147,11 +2295,66 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 				}
 			}
 
-			if (!isReentrant && queryCtx.activeQuery === sdkQuery) {
-				debug("provider: clearing activeQuery before final stream completion");
-				queryCtx.activeQuery = null;
-			}
-			finalizeCurrentStream(queryCtx, queryCtx.turnOutput?.stopReason);
+			const sessionId = capturedSessionId ?? sessionStateFor(queryCtx.piSessionId)?.sessionId;
+			await completeProviderTurn(queryCtx, async () => {
+				const [account, runtimeSettings] = await Promise.all([accountInfoPromise, runtimeSettingsPromise]);
+				const finalRequest = queryCtx.warmingRequest;
+				const finalContext = finalRequest ? toBridgeContext(finalRequest.context) : null;
+				const sourceDefinitionsUnchanged = finalContext !== null && JSON.stringify({
+					systemPrompt: finalContext.systemPrompt,
+					tools: finalContext.tools,
+				}) === JSON.stringify({ systemPrompt: context.systemPrompt, tools: context.tools });
+				if (
+					!wasAborted && !syncResult.preserveSharedSession && sessionId && finalContext && sourceDefinitionsUnchanged
+					&& queryCtx.turnOutput?.stopReason !== "error" && queryCtx.turnOutput?.stopReason !== "aborted"
+					&& account && init && usage && runtimeSettings
+					&& JSON.stringify(finalRequest?.options) === JSON.stringify(warmingRequest?.options)
+				) {
+					let sourceTranscript: { path: string; bytesBase64: string } | undefined;
+					try {
+						const path = openSession({ sessionId, projectPath: cwd, claudeDir: process.env.CLAUDE_CONFIG_DIR }).jsonlPath;
+						sourceTranscript = { path, bytesBase64: readFileSync(path).toString("base64") };
+					} catch (error) {
+						debug("cache-warming: source transcript evidence unavailable");
+					}
+					if (sourceTranscript) cacheWarming.complete(warmingGeneration, {
+						owner: streamClaudeAgentSdk,
+						model: warmingRequest!.model!,
+						cliModel,
+						reasoning: warmingRequest?.options.reasoning,
+						retention: cacheRetention,
+						sessionId,
+						context: finalRequest!.context,
+						requestOptions: finalRequest!.options,
+						controlsFingerprint,
+						processFingerprint,
+						systemPrompt: queryOptions.systemPrompt,
+						verbatimPrompts: queryOptions.verbatimPrompts,
+						mcpTools,
+						settings: runtimeSettings,
+						cwd,
+						settingSources: queryOptions.settingSources,
+						flagSettings: typeof queryOptions.settings === "object" ? queryOptions.settings as Record<string, unknown> : undefined,
+						extraArgs,
+						pathToClaudeCodeExecutable: claudeExecutable,
+						env: queryOptions.env ?? {},
+						evidence: {
+							account,
+							sdkVersion: WARMING_SDK_VERSION,
+							servedModel,
+							init,
+							usage,
+							sourceCachedTokens: (queryCtx.turnOutput?.usage.cacheRead ?? 0) + (queryCtx.turnOutput?.usage.cacheWrite ?? 0),
+						},
+						sourceTranscript,
+					}, syncResult.rebuilt === true);
+				}
+			}, () => {
+				if (!isReentrant && queryCtx.activeQuery === sdkQuery) {
+					debug("provider: clearing activeQuery before final stream completion");
+					queryCtx.activeQuery = null;
+				}
+			});
 		})
 		.catch((error) => {
 			debug(`provider: query error, model=${cliModel}, aborted=${Boolean(options?.signal?.aborted)}, error=`, error);
@@ -2449,6 +2652,7 @@ export default function (pi: ExtensionAPI) {
 		// top-level transition takes every mirror with it.
 		sharedSessions.clear();
 		historyRewrittenBySession.clear();
+		cacheWarming.invalidate(event);
 
 		// Clear the global streamSimple if this instance registered it.
 		// This allows /reload to work — the old instance clears the flag so
@@ -2463,6 +2667,7 @@ export default function (pi: ExtensionAPI) {
 		piUI = ctx.ui;
 		piMode = ctx.mode;
 		rememberSessionCwd(ctx.sessionManager.getSessionId(), ctx.cwd);
+		primePluginIds(ctx.cwd);
 		if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {
 			clearSession(`session_start:${event.reason}`);
 		}
@@ -2535,9 +2740,15 @@ export default function (pi: ExtensionAPI) {
 		reportLeaks("session_shutdown");
 		clearSession("session_shutdown");
 	});
+	pi.on("input", () => { cacheWarming.invalidate("new input", true); });
+	pi.on("model_select", () => { cacheWarming.invalidate("model changed"); });
+	pi.on("thinking_level_select", () => { cacheWarming.invalidate("thinking changed"); });
 
 	// Pi and summary extensions own compaction and branch summaries; native calls use the
-	// isolated provider path. Observe the completed rewrite below, not its owner.
+	// isolated provider path. Observe the completed rewrite below, not its owner. These
+	// handlers only cancel pending warming and return undefined so they never claim ownership.
+	pi.on("session_before_compact", () => { cacheWarming.invalidate("compaction"); });
+	pi.on("session_before_tree", () => { cacheWarming.invalidate("tree navigation"); });
 
 	// pi /compact and session-tree navigation (rewind / fork-at-point /
 	// branch switch) both mutate pi's messages array out from under the
@@ -2558,6 +2769,23 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_compact", (event, ctx) =>
 		sponsorMarkRebuildForSession(ctx.sessionManager.getSessionId(), `session_compact:${event.reason}:willRetry=${event.willRetry}`));
 	pi.on("session_tree", (_event, ctx) => sponsorMarkRebuildForSession(ctx.sessionManager.getSessionId(), "session_tree"));
+
+	// Pi's event is the only consent signal. It intentionally carries no request
+	// identity, so bind it to the actual registered stream owner plus the frozen
+	// source snapshot; a direct one-token request remains unauthorized.
+	pi.on("cache_warming_decision", (_event, eventCtx) => {
+		if (eventCtx.model?.baseUrl !== "claude-bridge") return undefined;
+		const actualOwner = globalState[ACTIVE_STREAM_SIMPLE_KEY];
+		if (actualOwner !== streamClaudeAgentSdk) return undefined;
+		return nativeWarmingDecision(cacheWarming, {
+			model: eventCtx.model, thinkingLevel: eventCtx.thinkingLevel,
+			sessionManager: eventCtx.sessionManager,
+			isIdle: () => eventCtx.isIdle() && activeQueryContexts.size === 0,
+		}, actualOwner, async (source) => ({
+			runtime: warmingRuntime(await resolveSettings({ cwd: source.cwd, settingSources: source.settingSources }) as RuntimeSettings, source.flagSettings),
+			controlsFingerprint: warmingControlsFingerprint({ providerSettings, longContextSettings }),
+		}));
+	});
 
 	// --- Provider ---
 	//

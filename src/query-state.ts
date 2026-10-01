@@ -7,6 +7,7 @@
 // Extracted from index.ts so tests can import without activating the extension.
 
 import type { AssistantMessage, AssistantMessageEventStream, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { captureWarmingRequest } from "./cache-warming.js";
 import type { McpResult } from "./extract-tool-results.js";
 import type { PromptStream } from "./prompt-stream.js";
 import type { RateLimitInfo } from "./rate-limit.js";
@@ -57,6 +58,8 @@ export class QueryContext {
 	/** A steer never reached CC. A first query has no session mirror yet, so
 	 *  completion must carry this into the mirror it creates. */
 	missedSteer = false;
+	/** Native warming binds to the final Pi context across all tool-result callbacks. */
+	warmingRequest: ReturnType<typeof captureWarmingRequest>;
 
 	// Per-turn (reset together)
 	turnOutput: AssistantMessage | null = null;
