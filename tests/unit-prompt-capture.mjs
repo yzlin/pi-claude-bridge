@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { collectPromptSkills, PI_PREAMBLE, projectPromptCapture, PromptCaptures } from "../src/prompt-capture.js";
+import { collectPromptSkills, collectToolGuidelines, PI_PREAMBLE, projectPromptCapture, PromptCaptures, withToolGuidelines } from "../src/prompt-capture.js";
 
 const PI_SYSTEM_PROMPT = fileURLToPath(new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js", import.meta.url));
 
@@ -375,5 +375,44 @@ describe("capture provenance", () => {
 			/recorded at agent_start/,
 			"the diagnostic must say which boundary last recorded the closest known prompt",
 		);
+	});
+});
+
+describe("tool guidelines", () => {
+	const tools = [
+		{ name: "codemode", description: "Run JavaScript that calls other tools.\n", parameters: {} },
+		{ name: "read", description: "Read a file.", parameters: {} },
+	];
+
+	it("appends each tool's pi guidelines to its own description", () => {
+		const captures = new PromptCaptures();
+		captures.record("key", capture({ toolGuidelines: { codemode: ["Use codemode to batch calls.", "  "] } }));
+
+		const [codemode, read] = withToolGuidelines(tools, captures.resolve("key").toolGuidelines);
+		assert.equal(codemode.description, "Run JavaScript that calls other tools.\n\n- Use codemode to batch calls.");
+		assert.equal(codemode.parameters, tools[0].parameters, "the schema is passed through untouched");
+		assert.equal(read, tools[1], "a tool without guidelines is left as is");
+	});
+
+	it("keeps a wrapped prompt's guidelines through its derived capture", () => {
+		const captures = new PromptCaptures();
+		captures.record(PARENT_KEY, capture({ toolGuidelines: { codemode: ["Use codemode to batch calls."] } }));
+
+		const derived = captures.resolveOrDerive(`<wrapper>\n${PARENT_KEY}\n</wrapper>`);
+		assert.equal(derived.toolGuidelines, undefined, "the derived capture records none of its own");
+		const [codemode] = withToolGuidelines(tools, collectToolGuidelines(derived));
+		assert.equal(codemode.description, "Run JavaScript that calls other tools.\n\n- Use codemode to batch calls.");
+	});
+
+	it("lets a descendant's guidelines replace its ancestor's for the same tool", () => {
+		const captures = new PromptCaptures();
+		captures.record(PARENT_KEY, capture({ toolGuidelines: { codemode: ["parent"], read: ["parent read"] } }));
+		captures.record(CHILD_KEY, capture({ custom: `${PARENT_KEY}${CHILD_SUFFIX}`, toolGuidelines: { codemode: ["child"] } }));
+
+		assert.deepEqual(collectToolGuidelines(captures.resolve(CHILD_KEY)), { codemode: ["child"], read: ["parent read"] });
+	});
+
+	it("leaves tools unchanged when pi recorded no guidelines", () => {
+		assert.equal(withToolGuidelines(tools, undefined), tools);
 	});
 });

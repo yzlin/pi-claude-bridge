@@ -15,6 +15,8 @@ export type PromptCaptureInput = {
 	 *  section name. pi renders each one as `<name>\ncontent\n</name>` after the built-in
 	 *  sections; the projection does the same. */
 	sections?: Record<string, string>;
+	/** Guideline bullets each tool contributes to pi's default prompt, keyed by tool name. */
+	toolGuidelines?: Record<string, string[]>;
 };
 
 type InheritedPrompt = {
@@ -94,6 +96,7 @@ export class PromptCaptures {
 		// Copied, not referenced: the caller's systemPromptOptions is a live object that
 		// later before_agent_start handlers mutate.
 		capture.sections = { ...input.sections };
+		capture.toolGuidelines = input.toolGuidelines;
 		capture.source = source;
 		if (!existing || customChanged) {
 			capture.inherited = this.findInheritedPrompts(systemPrompt, input.custom);
@@ -324,6 +327,49 @@ export function collectPromptSkills(capture: PromptCapture): Skill[] {
 
 	visit(capture);
 	return result;
+}
+
+/** Tool guidelines visible through inherited prompts; a descendant's entry for a tool
+ *  replaces its ancestor's. A derived capture records none of its own, so this is
+ *  what keeps a wrapped prompt's guidelines. */
+export function collectToolGuidelines(capture: PromptCapture): Record<string, string[]> | undefined {
+	let result: Record<string, string[]> | undefined;
+	const visiting = new Set<PromptCapture>();
+
+	const visit = (node: PromptCapture): void => {
+		if (visiting.has(node)) throw new Error("Cyclic prompt inheritance");
+		visiting.add(node);
+		for (const edge of node.inherited) visit(edge.parent);
+		if (node.toolGuidelines) result = { ...result, ...node.toolGuidelines };
+		visiting.delete(node);
+	};
+
+	visit(capture);
+	return result;
+}
+
+/**
+ * Tools with their pi prompt guidelines appended to the description.
+ *
+ * Pi lists each tool's guidelines in its default prompt's rules, which Claude Code's
+ * preset replaces, so without this Claude never sees them — codemode's "batch
+ * independent tool calls" rule among them. The description is the one place a
+ * guideline can name its tool unambiguously (Claude sees `mcp__…__read`, not
+ * `read`). Same format as codemode's own declarations.
+ */
+export function withToolGuidelines<T extends { name: string; description: string }>(
+	tools: T[],
+	guidelines: Record<string, string[]> | undefined,
+): T[] {
+	if (!guidelines) return tools;
+	return tools.map((tool) => {
+		const bullets = (guidelines[tool.name] ?? []).flatMap((line) => {
+			const text = line.trim();
+			return text ? [`- ${text}`] : [];
+		});
+		if (bullets.length === 0) return tool;
+		return { ...tool, description: `${tool.description.trim()}\n\n${bullets.join("\n")}` };
+	});
 }
 
 function projectCapture(
