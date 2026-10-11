@@ -51,7 +51,7 @@ async function execute({ offline, cwd, expectedHome, deadlineAt, baseUrl, scenar
  // Normal public SDK only. No custom executable, storage env, wrapper or login.
  const real = await import("@anthropic-ai/claude-agent-sdk");
  const warming = await import("../../src/cache-warming.ts");
- if (warming.WARMING_SDK_VERSION !== "0.3.285") throw Error("version refused");
+ if (warming.WARMING_SDK_VERSION !== "0.3.293") throw Error("version refused");
  let sdk = real;
  if (offline) {
   if (!root || arm !== join(root, "arm-0")) throw Error("offline root refused");

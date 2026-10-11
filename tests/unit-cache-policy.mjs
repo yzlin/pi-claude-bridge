@@ -82,15 +82,16 @@ describe("Pi-owned cache retention", () => {
 
 	it("remembers every resolved plugin id per cwd, sorted and cumulative", () => {
 		// CLI 2.1.285 loads cc-plugin-agents-md@builtin by default, injecting AGENTS.md
-		// (offline probe); only the exact @builtin id switches it off.
-		const builtin = "cc-plugin-agents-md@builtin";
+		// (offline probe); CLI 2.1.293 adds cc-plugin-plugin-authoring@builtin. Only the
+		// exact @builtin ids switch them off.
+		const builtins = ["cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin"];
 		__test.resetPluginIds();
-		assert.deepEqual(__test.pluginIdsFor("/p"), [builtin]);
+		assert.deepEqual(__test.pluginIdsFor("/p"), builtins);
 		__test.rememberPluginIds("/p", { enabledPlugins: { "z@m": true, "a@m": false } });
 		__test.rememberPluginIds("/p", { enabledPlugins: { "b@m": true } });
 		__test.rememberPluginIds("/p", {});
-		assert.deepEqual(__test.pluginIdsFor("/p"), ["a@m", "b@m", builtin, "z@m"], "a later resolve never re-enables a known plugin");
-		assert.deepEqual(__test.pluginIdsFor("/other"), [builtin]);
+		assert.deepEqual(__test.pluginIdsFor("/p"), ["a@m", "b@m", ...builtins, "z@m"], "a later resolve never re-enables a known plugin");
+		assert.deepEqual(__test.pluginIdsFor("/other"), builtins);
 		__test.resetPluginIds();
 	});
 
@@ -98,8 +99,8 @@ describe("Pi-owned cache retention", () => {
 		__test.resetPluginIds();
 		__test.rememberInitPlugins("/p", [{ name: "cc-plugin-telemetry", path: "builtin", source: "cc-plugin-telemetry@builtin" }, { name: "x", path: "/x" }, null]);
 		__test.rememberInitPlugins("/p", undefined);
-		assert.deepEqual(__test.pluginIdsFor("/p"), ["cc-plugin-agents-md@builtin", "cc-plugin-telemetry@builtin"]);
-		assert.deepEqual(__test.pluginIdsFor("/other"), ["cc-plugin-agents-md@builtin"]);
+		assert.deepEqual(__test.pluginIdsFor("/p"), ["cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin", "cc-plugin-telemetry@builtin"]);
+		assert.deepEqual(__test.pluginIdsFor("/other"), ["cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin"]);
 		__test.resetPluginIds();
 	});
 

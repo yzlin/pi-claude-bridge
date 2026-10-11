@@ -81,7 +81,7 @@ else test("Pi retention owns real provider/summary wire under conflicting local 
 		}
 		assert.deepEqual(configPaths.map(path => readFileSync(path)), configBytes);
 		assert.deepEqual(Object.fromEntries(Object.keys(conflicts).map(key => [key, process.env[key]])), envBefore);
-		t.diagnostic(JSON.stringify({ sdk: "0.3.285", cli: h.actualInits[0].claude_code_version,
+		t.diagnostic(JSON.stringify({ sdk: "0.3.293", cli: h.actualInits[0].claude_code_version,
 			requestedRetention: "short", childTtl: h.queries[0].options.env.CLAUDE_CODE_PROMPT_CACHE_TTL,
 			childGlobalDisable: h.queries[0].options.env.DISABLE_PROMPT_CACHING,
 			childHaikuDisable: h.queries[0].options.env.DISABLE_PROMPT_CACHING_HAIKU,

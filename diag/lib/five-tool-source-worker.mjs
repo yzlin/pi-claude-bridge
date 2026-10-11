@@ -39,13 +39,13 @@ process.on("message", async message => {
    } });
   // As in the qualification worker: production imports must follow SDK instrumentation.
   warming = await import("../../src/cache-warming.ts");
-  assert.equal(warming.WARMING_SDK_VERSION, "0.3.285");
+  assert.equal(warming.WARMING_SDK_VERSION, "0.3.293");
   const sdk = await import("@anthropic-ai/claude-agent-sdk");
   const { makePromptStream, userMessage } = await import("../../src/prompt-stream.ts");
   const { createToolServer } = await import("../../src/mcp-server.ts");
   const { providerCacheControls } = await import("../../src/cache-policy.ts");
   const resolved = await sdk.resolveSettings({ cwd: message.cwd });
-  const plugins = { "cc-plugin-agents-md@builtin": false };
+  const plugins = { "cc-plugin-agents-md@builtin": false, "cc-plugin-plugin-authoring@builtin": false };
   for (const row of [resolved.effective, ...resolved.sources.map(row => row.settings)]) for (const id of Object.keys(row?.enabledPlugins ?? {})) plugins[id] = false;
   // Match provider activation: otherwise the CLI sends an extra uncached title query.
   const cache = providerCacheControls({ ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }, "short");

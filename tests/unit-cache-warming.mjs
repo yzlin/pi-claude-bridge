@@ -29,6 +29,7 @@ const evidence = {
 	usage: { provider: "firstParty", canonicalModel: "claude-haiku-4-5", costBasis: "list" },
 	sourceCachedTokens: 7,
 };
+const secDefault = { name: "cc-plugin-sec-default", path: "builtin", source: "cc-plugin-sec-default@builtin" };
 const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");
 const fixtureDir = mkdtempSync(`${tmpdir()}/warming-fixture-`);
@@ -410,6 +411,9 @@ describe("preflight repair regressions", () => {
 	it("rejects an external init MCP server or plugin and requires strict isolation", () => {
 		for (const bad of [
 			{ evidence: { ...evidence, init: { ...evidence.init, plugins: [{ name: "external" }] } } },
+			{ evidence: { ...evidence, init: { ...evidence.init, plugins: [{ ...secDefault, path: "/elsewhere" }] } } },
+			{ evidence: { ...evidence, init: { ...evidence.init, plugins: [{ name: "cc-plugin-tips", path: "builtin", source: "cc-plugin-tips@builtin" }] } } },
+			{ evidence: { ...evidence, init: { ...evidence.init, plugins: [secDefault, { name: "external", path: "/x", source: "external@m" }] } } },
 			{ evidence: { ...evidence, init: { ...evidence.init, mcp_servers: [{ name: "external", status: "connected" }] } } },
 			{ extraArgs: {} }, { env: { ...source.env, ANTHROPIC_BASE_URL: "https://elsewhere.invalid" } },
 		]) {
@@ -417,6 +421,13 @@ describe("preflight repair regressions", () => {
 			c.complete(c.begin("owner"), { ...source, ...bad });
 			assert.equal(c.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, retention: "short", runtime: safeRuntime }), "stop");
 		}
+	});
+	it("accepts the org-seated sec-default built-in, which flag settings cannot switch off", () => {
+		// CLI 2.1.293 seats it for Team/Enterprise logins (zero-turn reloadPlugins probe).
+		const seated = { ...source, evidence: { ...evidence, init: { ...evidence.init, plugins: [secDefault] } } };
+		const c = new CacheWarmingCoordinator({ qualified: new Set([warmingQualificationKey(seated)]) });
+		c.complete(c.begin("owner"), seated);
+		assert.equal(c.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, retention: "short", runtime: safeRuntime }), "warm");
 	});
 	it("accepts only the expected SDK-owned server and exact tools on otherwise eligible sources", () => {
 		const server = { name: "custom-tools", status: "connected", source: "sdk" };
@@ -853,15 +864,16 @@ describe("qualification declarations and late completion", () => {
 		const declaration = readFileSync(join(dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"))), "sdk.d.ts"), "utf8");
 		const usage = declaration.slice(declaration.indexOf("export declare type ModelUsage ="), declaration.indexOf("export declare type ModelUsage =") + 3500);
 		assert.match(usage, /API provider that served this model \(e\.g\. 'firstParty'/);
-		assert.equal(PRODUCTION_QUALIFIED_WARMING_MODELS.size, 3);
+		assert.equal(PRODUCTION_QUALIFIED_WARMING_MODELS.size, 1);
 	});
-	it("qualifies only the explicitly approved Haiku and 5.5 lanes, nothing adjacent", async () => {
+	it("qualifies only the explicitly approved Haiku lane, nothing adjacent", async () => {
 		const { PRODUCTION_QUALIFIED_WARMING_MODELS: production } = await import("../src/cache-warming.js");
-		const key = ({ model = "claude-haiku-4-5", cliModel = model, sdk = "0.3.285", cli = "2.1.285", provider = "firstParty", canonical = model, costBasis = "list", plan = "Claude Team" } = {}) =>
+		const key = ({ model = "claude-haiku-4-5", cliModel = model, sdk = "0.3.293", cli = "2.1.293", provider = "firstParty", canonical = model, costBasis = "list", plan = "Claude Team" } = {}) =>
 			warmingQualificationKey({ model: { id: model }, cliModel, evidence: { sdkVersion: sdk, init: { claude_code_version: cli },
 				usage: { provider, canonicalModel: canonical, costBasis }, account: { lane: JSON.stringify(["firstParty", plan, null, null]) } } });
-		assert.deepEqual([...production], [key(), key({ model: "claude-sonnet-5-5" }), key({ model: "claude-opus-5-5", cliModel: "claude-opus-5-5[1m]" })]);
-		for (const change of [{ model: "claude-sonnet-5-5", cliModel: "claude-sonnet-5-5[1m]" }, { model: "claude-opus-5-5" }, { model: "claude-sonnet-4-6" }, { sdk: "0.3.286" }, { cli: "2.1.286" },
+		assert.deepEqual([...production], [key()]);
+		for (const change of [{ model: "claude-sonnet-5-5" }, { model: "claude-opus-5-5", cliModel: "claude-opus-5-5[1m]" }, { model: "claude-sonnet-4-6" },
+			{ sdk: "0.3.285", cli: "2.1.285" }, { sdk: "0.3.294" }, { cli: "2.1.294" },
 			{ plan: "Claude Max" }, { plan: "Claude Pro" }, { provider: "bedrock" }, { costBasis: "other" }]) assert.equal(production.has(key(change)), false, JSON.stringify(change));
 	});
 	it("ignores an old successful refresh after new work without suppressing the newer snapshot", async () => {

@@ -888,9 +888,10 @@ function debugSessionPaths(label: string, cwd: string, jsonlPath: string): void 
 // (session start, then every query). A plugin enabled mid-session loads for one
 // turn. Ids accumulate so a later resolve never re-enables one; policy still wins.
 // CLI built-ins never appear in settings: CLI 2.1.285 loads cc-plugin-agents-md
-// by default, which injects AGENTS.md past claudeMdExcludes, and only its exact
-// @builtin id switches it off. Other built-ins are learned from each query's init.
-const BUILTIN_PLUGIN_IDS = ["cc-plugin-agents-md@builtin"];
+// by default, which injects AGENTS.md past claudeMdExcludes, and CLI 2.1.293 adds
+// cc-plugin-plugin-authoring. Only their exact @builtin ids switch them off. Other
+// built-ins are learned from each query's init.
+const BUILTIN_PLUGIN_IDS = ["cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin"];
 const knownPluginIds = new Map<string, Set<string>>();
 function addPluginIds(cwd: string, ids: string[]): void {
 	if (!ids.length) return;

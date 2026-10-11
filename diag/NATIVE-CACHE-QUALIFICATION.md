@@ -1,5 +1,5 @@
 ---
-summary: "Haiku and conservative 5.5 Team native lanes; four sealed 5.5 SDK expiry comparisons and offline native integration evidence."
+summary: "Haiku Team native lane on SDK 0.3.293; earlier 5.5 Team lanes and sealed SDK expiry comparisons on 0.3.285, and offline native integration evidence."
 read_when:
   - "Changing model eligibility or cache-warming SDK options"
   - "Interpreting native cache hits, tool-source wire divergence, or sealed diagnostic allowances"
@@ -7,7 +7,54 @@ read_when:
 
 # Native cache qualification — exact Haiku and conservative 5.5 Team lanes
 
-## Current native integration — separately approved conservative 5.5 enablement
+## Current: Haiku requalified on SDK 0.3.293; 5.5 not requalified
+
+Upstream moved the SDK to `^0.3.293` (CLI 2.1.293). Every lane was pinned to 0.3.285,
+so warming stopped. The user approved requalifying Haiku only.
+`PRODUCTION_QUALIFIED_WARMING_MODELS` now holds one lane: Haiku 4.5 / Claude Team /
+SDK 0.3.293 / CLI 2.1.293 / firstParty/list. The 5.5 lanes were removed because
+`^0.3.293` cannot install 0.3.285. The 5.5 admission rules in `decide()` stay.
+
+CLI 2.1.293 changes two things that refuse every source:
+
+- **`cc-plugin-plugin-authoring@builtin`** loads by default. `enabledPlugins: false` on
+  its exact id switches it off, so the bridge now adds it to `BUILTIN_PLUGIN_IDS`.
+  Found offline: the decision was `stop` because `init.plugins` was not empty.
+- **`cc-plugin-sec-default@builtin`** is seated for Team and Enterprise organizations.
+  Flag `enabledPlugins` cannot switch it off under either id. The proof is a zero-turn
+  probe on the real Team login (`probe-builtin-plugins.mjs`, `reloadPlugins` held,
+  no user message). It adds hooks (inert under `disableAllHooks`) and a
+  `security-review` command, but no tools, MCP servers or agents. With user approval,
+  `isolatedSource()` now accepts `init.plugins` that is empty or exactly this one
+  built-in. The tool and MCP checks stay exact.
+
+Three allocations of the Haiku-only harness (`native-cache-haiku-12q-25m-v*`, at most
+12 SDK starts and 25 minutes each) ran once each:
+
+| Allocation | Result | SDK starts / HTTP |
+|---|---|---|
+| v4 | Sealed failed at the account gate. `env -i` dropped `USER`, so the stored login was not found. | 1 / 0 |
+| v5 | Sealed after the seed. The account was eligible, but the Team-seated sec-default plugin failed source isolation. | 1 / 1 |
+| v6 | **Complete. Matrix and both expiry comparisons passed.** | 12 / 12 |
+
+v6 evidence (`diag/native-cache-haiku-v6.live/`, code hash `0f4b9422…`). Every source
+reported `initPlugins: ["cc-plugin-sec-default@builtin"]` and the lane
+`["firstParty","Claude Team",null,null]`, served `claude-haiku-4-5-20251001`.
+
+| Check | Comparison 0 | Comparison 1 |
+|---|---|---|
+| Refresh read / write / output (at 240.2 s) | 17 803 / 66 / 1 | 17 807 / 66 / 1 |
+| Warm follow-up read (at 367.3 s) | 17 803 | 17 807 |
+| Control follow-up read / write | 0 / 17 853 | 0 / 17 957 |
+
+The matrix refresh read 17 801 and wrote 66. This matches the v3 profile on 0.3.285.
+With user approval, the sealed 5.5 diagnostic harnesses (`probe-five-*`, the account
+probe) are repinned to SDK 0.3.293 / CLI 2.1.293. They also switch off the
+plugin-authoring built-in, so their offline tests run again. Their code hashes change,
+so the original hashes identify only the historical versions. All allocations stay
+sealed (their ledgers exist), and no live run is authorized.
+
+## Earlier: separately approved conservative 5.5 enablement (SDK 0.3.285)
 
 After independent inspection accepted SDK expiry v2, the user explicitly chose
 **implement and enable exact lanes**. `PRODUCTION_QUALIFIED_WARMING_MODELS` now contains

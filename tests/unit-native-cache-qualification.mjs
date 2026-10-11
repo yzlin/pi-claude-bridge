@@ -71,9 +71,9 @@ test("default/readiness never authorize live; strict fixed cohort and approval",
 	assert.equal(parseArgs(["--offline"]), "offline");
 	assert.equal(parseArgs(["--live", APPROVAL.id]), "live");
 	for (const args of [["--live"], ["--model", "x"], ["--offline", "--live"], ["--live", APPROVAL.id, "--limit", "80"]]) assert.throws(() => parseArgs(args));
-	assert.deepEqual(COHORT, ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"]); assert.equal(APPROVAL.sdkStarts, 16); assert.equal(APPROVAL.elapsedMs, 1_500_000);
+	assert.deepEqual(COHORT, ["claude-haiku-4-5"]); assert.equal(APPROVAL.sdkStarts, 12); assert.equal(APPROVAL.elapsedMs, 1_500_000);
 	assert.notEqual(APPROVAL.id, "native-cache-40q-40m-v1", "the sealed allocation id is never reused");
-	for (const sealed of ["native-cache-40q-40m-v1", "native-cache-haiku-12q-20m-v1", "native-cache-haiku-12q-20m-v2"]) {
+	for (const sealed of ["native-cache-40q-40m-v1", "native-cache-haiku-12q-20m-v1", "native-cache-haiku-12q-20m-v2", "native-cache-3m-16q-25m-v3", "native-cache-haiku-12q-25m-v4", "native-cache-haiku-12q-25m-v5"]) {
 		assert.notEqual(APPROVAL.id, sealed); assert.throws(() => parseArgs(["--live", sealed]));
 	}
 });
@@ -110,7 +110,7 @@ test("fixed partitions, deadline and clock regression fail closed", () => {
 				assert.throws(() => owner.reserve("matrix", COHORT[0]));
 				for (let i = 0; i < 10; i++) owner.reserve("expiry", COHORT[0]);
 				assert.throws(() => owner.reserve("expiry", COHORT[0]));
-				assert.equal(owner.state.reserved, 16);
+				assert.equal(owner.state.reserved, 12);
 			} else now = mode === "deadline" ? 2_401_000 : 999;
 			assert.throws(() => owner.reserve("followup", COHORT[0]));
 			owner.close();

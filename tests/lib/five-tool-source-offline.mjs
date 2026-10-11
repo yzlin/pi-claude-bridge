@@ -33,7 +33,7 @@ process.on("message", async message => {
   tool = createToolServer("custom-tools", [{ name: "sentinel", description: "Synthetic inert sentinel. Returns a fixed value; no side effects.",
    inputSchema: { type: "object", properties: {} }, handler: async () => { assert.equal(activeStage, "tool", "sentinel cannot execute outside the source tool turn"); toolCalls++; return { content: [{ type: "text", text: "SYNTHETIC_TOOL_RESULT" }] }; } }]);
   const resolved = await resolveSettings({ cwd: process.cwd() });
-  const plugins = { "cc-plugin-agents-md@builtin": false };
+  const plugins = { "cc-plugin-agents-md@builtin": false, "cc-plugin-plugin-authoring@builtin": false };
   for (const row of [resolved.effective, ...resolved.sources.map(row => row.settings)]) for (const id of Object.keys(row?.enabledPlugins ?? {})) plugins[id] = false;
   const cache = providerCacheControls({ ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }, "short");
   const base = { cwd: process.cwd(), model: message.model, env: cache.env, tools: [], strictMcpConfig: true,
@@ -56,7 +56,7 @@ process.on("message", async message => {
     let init, terminal, starts = 0, calls = 0;
     for await (const m of current) {
      if (m.type === "system" && m.subtype === "init") {
-      init = m; assert.equal(m.claude_code_version, "2.1.285"); assert.deepEqual(m.plugins, []);
+      init = m; assert.equal(m.claude_code_version, "2.1.293"); assert.deepEqual(m.plugins, []);
       assert.ok(m.tools.every(name => String(name).startsWith("mcp__custom-tools__")));
      }
      if (m.type === "stream_event" && m.event.type === "message_start") starts++;

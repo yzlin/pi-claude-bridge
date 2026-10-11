@@ -54,7 +54,7 @@ export function wireEvidence(body, expected, source) {
 	return wire;
 }
 export function validateSourceInit(init) {
-	assert.equal(init.claude_code_version, "2.1.285"); assert.equal(init.apiKeySource, "none"); assert.deepEqual(init.plugins, []);
+	assert.equal(init.claude_code_version, "2.1.293"); assert.equal(init.apiKeySource, "none"); assert.deepEqual(init.plugins, []);
 	assert.deepEqual(init.tools, ["mcp__custom-tools__sentinel"]);
 	assert.deepEqual(init.mcp_servers, [{ name: "custom-tools", status: "connected", source: "sdk" }]);
 }

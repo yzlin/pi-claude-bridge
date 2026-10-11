@@ -91,9 +91,9 @@ test("offline warming prerequisite: withheld prompt, real SDK metadata and budge
 			} }]);
 		const q = query({ prompt: prompt.stream, options: {
 			cwd, model: MODEL, tools: [], strictMcpConfig: true, permissionMode: "dontAsk", settingSources: [],
-			// Like providerQuerySettings: CLI 2.1.285 loads this built-in by default.
+			// Like providerQuerySettings: the CLI loads these built-ins by default.
 			settings: { disableAllHooks: true, autoMemoryEnabled: false, includeGitInstructions: false, claudeMdExcludes: ["/**"], promptCacheTtl: "5m",
-				enabledPlugins: { "cc-plugin-agents-md@builtin": false } },
+				enabledPlugins: { "cc-plugin-agents-md@builtin": false, "cc-plugin-plugin-authoring@builtin": false } },
 			hooks: {}, systemPrompt: "Inert synthetic system for an offline SDK contract.",
 			env: { ...env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(active.cap) },
 			thinking: { type: "disabled" }, maxTurns: 1, includePartialMessages: true, promptSuggestions: false,

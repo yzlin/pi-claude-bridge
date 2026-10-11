@@ -27,7 +27,7 @@ function source(id = "claude-opus-5-5") {
     settings, env: { ENABLE_CLAUDEAI_MCP_SERVERS: "0" }, extraArgs: { "strict-mcp-config": null },
     processFingerprint: warmingControlsFingerprint(undefined), verbatimPrompts: true,
     evidence: { account: accountEvidence(account), sdkVersion: WARMING_SDK_VERSION, servedModel: id,
-      init: { claude_code_version: "2.1.285", apiKeySource: "none", tools: [], mcp_servers: [], plugins: [] },
+      init: { claude_code_version: "2.1.293", apiKeySource: "none", tools: [], mcp_servers: [], plugins: [] },
       usage: { provider: "firstParty", canonicalModel: id, costBasis: "list" }, sourceCachedTokens: 7 },
     sourceTranscript: { path, bytesBase64: Buffer.from("synthetic-source").toString("base64") },
   };
@@ -35,10 +35,13 @@ function source(id = "claude-opus-5-5") {
 const decision = s => ({ owner: s.owner, piSessionId: s.requestOptions.sessionId, model: s.model,
   idle: true, retention: s.retention, runtime: s.settings, controlsFingerprint: s.controlsFingerprint });
 function publish(c, s) { c.complete(c.begin(s.owner), s); }
+// 5.5 is not production-qualified on SDK 0.3.293. These keys stand in for an
+// approved 5.5 lane so the extra 5.5 gating stays covered.
+const QUALIFIED_5_5 = new Set(["claude-sonnet-5-5", "claude-opus-5-5"].map(id => warmingQualificationKey(source(id))));
 
 for (const id of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
   test(`${id}: first completed SDK source stays gated; next same-lane source qualifies`, () => {
-    const s = source(id), c = new CacheWarmingCoordinator({ qualified: PRODUCTION_QUALIFIED_WARMING_MODELS });
+    const s = source(id), c = new CacheWarmingCoordinator({ qualified: QUALIFIED_5_5 });
     publish(c, s);
     assert.equal(c.snapshot().sourceQueryCount, 1);
     assert.equal(c.decide(decision(s)), "stop");
@@ -62,21 +65,21 @@ test("5.5: lifecycle boundaries, changed source lanes and stale completion canno
     s => ({ ...s, systemPrompt: { ...s.systemPrompt, append: "changed" } }),
     s => ({ ...s, evidence: { ...s.evidence, account: accountEvidence({ ...account, email: "other@example.invalid" }) } }),
   ]) {
-    const c = new CacheWarmingCoordinator({ qualified: PRODUCTION_QUALIFIED_WARMING_MODELS });
+    const c = new CacheWarmingCoordinator({ qualified: QUALIFIED_5_5 });
     publish(c, original); publish(c, mutate(original));
     assert.equal(c.snapshot().sourceQueryCount, 1);
     assert.equal(c.decide(decision(mutate(original))), "stop");
   }
   for (const boundary of ["session_start", "model changed", "thinking changed", "compaction", "tree navigation"]) {
-    const c = new CacheWarmingCoordinator({ qualified: PRODUCTION_QUALIFIED_WARMING_MODELS });
+    const c = new CacheWarmingCoordinator({ qualified: QUALIFIED_5_5 });
     publish(c, original); c.invalidate(boundary); publish(c, original);
     assert.equal(c.snapshot().sourceQueryCount, 1, boundary);
   }
-  const rebuilt = new CacheWarmingCoordinator({ qualified: PRODUCTION_QUALIFIED_WARMING_MODELS });
+  const rebuilt = new CacheWarmingCoordinator({ qualified: QUALIFIED_5_5 });
   publish(rebuilt, original);
   rebuilt.complete(rebuilt.begin(original.owner), original, true);
   assert.equal(rebuilt.snapshot().sourceQueryCount, 1, "same-ID imported-history rebuild resets credit");
-  const c = new CacheWarmingCoordinator({ qualified: PRODUCTION_QUALIFIED_WARMING_MODELS });
+  const c = new CacheWarmingCoordinator({ qualified: QUALIFIED_5_5 });
   const stale = c.begin(original.owner), current = c.begin(original.owner);
   c.complete(stale, original); c.complete(current, original);
   assert.equal(c.snapshot().sourceQueryCount, 1);
@@ -85,7 +88,7 @@ test("5.5: lifecycle boundaries, changed source lanes and stale completion canno
 test("5.5: an uncaptured or ineligible source breaks consecutive query credit", () => {
   const s = source();
   for (const interruption of [undefined, { ...s, retention: "none" }, { ...s, reasoning: "high" }]) {
-    const c = new CacheWarmingCoordinator({ qualified: PRODUCTION_QUALIFIED_WARMING_MODELS });
+    const c = new CacheWarmingCoordinator({ qualified: QUALIFIED_5_5 });
     publish(c, s);
     const incomplete = c.begin(s.owner);
     if (interruption) c.complete(incomplete, interruption);
@@ -109,7 +112,7 @@ test("5.5: long retention, missing parity and adjacent runtime/accounting/model 
     { evidence: { ...original.evidence, account: accountEvidence({ ...account, subscriptionType: "Claude Max" }) } },
   ];
   for (const change of changes) {
-    const s = { ...original, ...change }, c = new CacheWarmingCoordinator({ qualified: PRODUCTION_QUALIFIED_WARMING_MODELS });
+    const s = { ...original, ...change }, c = new CacheWarmingCoordinator({ qualified: QUALIFIED_5_5 });
     publish(c, s); publish(c, s);
     assert.equal(c.decide(decision(s)), "stop", JSON.stringify(change));
   }
@@ -156,5 +159,5 @@ test("5.5 refresh uses source verbatim prompts and reconciles requested Opus SDK
   });
   assert.equal(options.verbatimPrompts, true);
   assert.equal(result.kind, "success");
-  assert.equal(PRODUCTION_QUALIFIED_WARMING_MODELS.has(warmingQualificationKey(s)), true);
+  assert.equal(PRODUCTION_QUALIFIED_WARMING_MODELS.has(warmingQualificationKey(s)), false, "5.5 is not qualified on SDK 0.3.293");
 });

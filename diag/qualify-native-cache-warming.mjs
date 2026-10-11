@@ -11,8 +11,8 @@ import { APPROVAL, COHORT, BudgetOwner, parseArgs, guardEnvironment, validateApp
 import { guardOrdinaryEnvironment } from "./lib/native-cache-account-probe-owner.mjs";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
-const markerPath = join(repo, "diag/native-cache-3m-v3.approved.json");
-const liveLedger = join(repo, "diag/native-cache-3m-v3.live");
+const markerPath = join(repo, "diag/native-cache-haiku-v6.approved.json");
+const liveLedger = join(repo, "diag/native-cache-haiku-v6.live");
 const workerPath = join(repo, "diag/lib/native-cache-qualification-worker.mjs");
 function codeHash() {
 	const files = ["diag/qualify-native-cache-warming.mjs", "diag/lib/native-cache-account-probe-owner.mjs", ...readdirSync(join(repo, "diag/lib")).filter(name => /^native-cache-qualification-.*\.mjs$/.test(name)).map(name => `diag/lib/${name}`),
@@ -191,7 +191,6 @@ async function run(offline, fixture) {
 				comparisons.push(evidence); record({ comparison: evidence });
 			} finally { warm.close(); control.close(); }
 		}
-		if (!offline) for (const model of COHORT.filter(model => model !== "claude-haiku-4-5")) await matrix(model);
 		record({ status: "complete", rows, comparisons, unverifiedModels: COHORT.filter(model => !rows.some(row => row.model === model && row.status === "candidate-pass")), productionQualifications: 0, reserved: owner.state.reserved, sdkStarts: owner.state.sdkStarts, httpAttempts: owner.state.httpAttempts, forwarded: owner.state.forwarded });
 		check(); owner.finish("complete");
 		console.log(JSON.stringify({ mode: offline ? "offline-simulation" : "live", status: "complete", ledger: path, sdkStarts: owner.state.sdkStarts, httpAttempts: owner.state.httpAttempts, forwarded: owner.state.forwarded, candidateRows: rows.length, productionQualifications: 0, ttlProof: offline ? "not exercised" : "requires independent acceptance" }));

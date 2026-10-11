@@ -21,7 +21,7 @@ test("wire gates enforce model, exact sentinel inventory, output cap and stable 
   { ...body, tools: [{ ...body.tools[0], description: "Changed" }] }]) assert.throws(() => transport.wireEvidence(value, expected, source));
 });
 test("source init permits exactly the pinned SDK sentinel server and tool", () => {
- const init = { claude_code_version: "2.1.285", apiKeySource: "none", plugins: [], tools: ["mcp__custom-tools__sentinel"],
+ const init = { claude_code_version: "2.1.293", apiKeySource: "none", plugins: [], tools: ["mcp__custom-tools__sentinel"],
   mcp_servers: [{ name: "custom-tools", status: "connected", source: "sdk" }] };
  transport.validateSourceInit(init);
  for (const value of [{ ...init, tools: [] }, { ...init, tools: [...init.tools, "mcp__custom-tools__extra"] },

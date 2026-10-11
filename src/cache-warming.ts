@@ -193,12 +193,24 @@ export function warmingControlsFingerprint(bridgeControls: unknown, env: NodeJS.
 	return createHash("sha256").update(identity({ bridgeControls, env: normalizedEnv })).digest("hex");
 }
 
+// CLI 2.1.293 seats this built-in for Team and Enterprise organizations, and flag
+// enabledPlugins cannot switch it off (zero-turn reloadPlugins probe on a Team login).
+// It adds hooks, inert under disableAllHooks, and a command, but no tools or MCP
+// servers; the exact tool and server checks below still apply.
+const ORG_SEATED_PLUGIN = "cc-plugin-sec-default@builtin";
+function allowedInitPlugins(plugins: unknown[]): boolean {
+	if (plugins.length === 0) return true;
+	if (plugins.length !== 1) return false;
+	const plugin = plugins[0] as { source?: unknown; path?: unknown } | null;
+	return plugin?.source === ORG_SEATED_PLUGIN && plugin.path === "builtin";
+}
+
 function isolatedSource(source: Readonly<WarmingSource>): boolean {
 	const init = source.evidence.init;
 	if (source.pathToClaudeCodeExecutable || Object.keys(source.extraArgs ?? {}).some(key => key !== "model" && key !== "strict-mcp-config")) return false;
 	if (source.extraArgs?.["strict-mcp-config"] !== null || source.env.ENABLE_CLAUDEAI_MCP_SERVERS !== "0") return false;
 	if (Object.entries(source.env).some(([key, value]) => value && key !== "CLAUDE_CODE_PROMPT_CACHE_TTL" && !(key === "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" && value === "1") && /^(ANTHROPIC_|AWS_|BEDROCK_|GOOGLE_|VERTEX_|AZURE_|FOUNDRY_|MANTLE_|CLAUDE_CODE_|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|HTTPS?_PROXY|ALL_PROXY)/i.test(key))) return false;
-	if (!Array.isArray(init.plugins) || init.plugins.length !== 0 || !Array.isArray(init.mcp_servers) || !Array.isArray(init.tools)) return false;
+	if (!Array.isArray(init.plugins) || !allowedInitPlugins(init.plugins) || !Array.isArray(init.mcp_servers) || !Array.isArray(init.tools)) return false;
 	const servers = source.mcpTools.length ? [{ name: MCP_SERVER_NAME, status: "connected", source: "sdk" }] : [];
 	const tools = source.mcpTools.map(t => `mcp__${MCP_SERVER_NAME}__${t.name}`).sort();
 	return identity(init.mcp_servers) === identity(servers) && identity([...init.tools].sort()) === identity(tools);
@@ -533,14 +545,10 @@ export async function runIsolatedRefresh(
 }
 
 // Exact live-proven lanes, explicitly approved for native integration.
-// Haiku: native-cache-3m-v3 + expiry comparisons. 5.5: five-expiry-v2,
-// two comparisons/model with verbatim prompts after two completed source queries.
-// 5.5 first-turn, one-hour and adjacent lanes remain gated (see decide()).
+// Haiku: native-cache-haiku-v6 matrix + two expiry comparisons on SDK 0.3.293.
+// 5.5 passed five-expiry-v2 on SDK 0.3.285 only and is not requalified; the
+// 5.5 rules in decide() stay for a future lane.
 export const PRODUCTION_QUALIFIED_WARMING_MODELS: ReadonlySet<string> = new Set([
-	identity(["budget-max-tokens-tiny-prompt-v2", "claude-haiku-4-5", "claude-haiku-4-5", "0.3.285", "2.1.285",
+	identity(["budget-max-tokens-tiny-prompt-v2", "claude-haiku-4-5", "claude-haiku-4-5", "0.3.293", "2.1.293",
 		"firstParty", "claude-haiku-4-5", "list", identity(["firstParty", "Claude Team", null, null])]),
-	identity(["budget-max-tokens-tiny-prompt-v2", "claude-sonnet-5-5", "claude-sonnet-5-5", "0.3.285", "2.1.285",
-		"firstParty", "claude-sonnet-5-5", "list", identity(["firstParty", "Claude Team", null, null])]),
-	identity(["budget-max-tokens-tiny-prompt-v2", "claude-opus-5-5", "claude-opus-5-5[1m]", "0.3.285", "2.1.285",
-		"firstParty", "claude-opus-5-5", "list", identity(["firstParty", "Claude Team", null, null])]),
 ]);

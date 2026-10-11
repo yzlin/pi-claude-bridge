@@ -105,9 +105,9 @@ async function worker() {
    if (offline ? process.env.CLAUDE_CONFIG_DIR !== join(process.env.TMPDIR, "home/.claude") : Object.hasOwn(process.env, "CLAUDE_CONFIG_DIR")) throw Error("config refused");
    timer = setTimeout(stop, Math.max(0, deadlineAt - Date.now() - 500));
    const sdk = await import("@anthropic-ai/claude-agent-sdk"), warming = await import("../src/cache-warming.ts");
-   if (warming.WARMING_SDK_VERSION !== "0.3.285") throw Error("version refused");
+   if (warming.WARMING_SDK_VERSION !== "0.3.293") throw Error("version refused");
    const { providerCacheControls } = await import("../src/cache-policy.ts"), { createToolServer } = await import("../src/mcp-server.ts");
-   const resolved = await sdk.resolveSettings({ cwd }), plugins = { "cc-plugin-agents-md@builtin": false };
+   const resolved = await sdk.resolveSettings({ cwd }), plugins = { "cc-plugin-agents-md@builtin": false, "cc-plugin-plugin-authoring@builtin": false };
    for (const row of [resolved.effective, ...resolved.sources.map(s => s.settings)]) for (const id of Object.keys(row?.enabledPlugins ?? {})) plugins[id] = false;
    const cache = providerCacheControls({ ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }, "short");
    const settings = { ...cache.settings, enabledPlugins: plugins, disableAllHooks: true, autoMemoryEnabled: false, includeGitInstructions: false, claudeMdExcludes: ["/**"] };

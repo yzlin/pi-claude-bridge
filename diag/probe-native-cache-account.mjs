@@ -149,7 +149,7 @@ async function run(fixture) {
      if (!offline && codeHash() !== digest) throw Error("code changed");
      validateApproval(marker, digest);
      if (fixture?.fault === "persistence") persistenceFault = true;
-     owner.state.versions = { sdkPackage: "0.3.285", node: process.versions.node, cliRuntime: null };
+     owner.state.versions = { sdkPackage: "0.3.293", node: process.versions.node, cliRuntime: null };
      owner.state.controls = { settingSources: "default", homeMode: offline ? "synthetic-explicit-config" : "ordinary-parent",
       cwdMode: offline ? "synthetic" : "repo", envMode: offline ? "synthetic" : "ordinary-reviewed",
       preflight: "passed", tools: 0, mcpServers: 0, hooksDisabled: true, autoMemory: false };

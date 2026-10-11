@@ -14,7 +14,7 @@ test("stalled loopback response cancels through actual SDK and sealed observer b
  assert.deepEqual(result.rows.map(row => row.mode), ["stream-abort", "stream-abort-close", "string-abort", "observer-stream-abort", "timer-pause"]);
  for (const row of result.rows.slice(0, 4)) {
   assert.equal(row.sdkStarts, 1); assert.equal(row.modelHttpAttempts, 1); assert.equal(row.forwarded, 0);
-  assert.equal(row.cliVersion, "2.1.285"); assert.equal(row.toolCalls, 0); assert.equal(row.completedProviderResponses, 0);
+  assert.equal(row.cliVersion, "2.1.293"); assert.equal(row.toolCalls, 0); assert.equal(row.completedProviderResponses, 0);
   assert.equal(row.accountEligible, false); assert.equal(row.requestObserved, true); assert.equal(row.abortIssued, true);
   assert.equal(row.transportRefused, undefined); assert.equal(row.fallbackClose, undefined);
   assert.ok(row.iteratorSettledAfterAbortMs >= 0 && row.iteratorSettledAfterAbortMs < 5000);

@@ -29,6 +29,7 @@ helpers; keep those dependencies. The package does not ship this directory.
 | What request prefix actually changed? | [capture-proxy.mjs](capture-proxy.mjs), [diff-captures.mjs](diff-captures.mjs) | Live forwarding/raw captures versus comparison of existing captures. |
 | Do git or dynamic preset sections change caching? | [probe-git-cache.mjs](probe-git-cache.mjs), [probe-dynamic-sections.mjs](probe-dynamic-sections.mjs) | Manual live experiments; repository mutation, not routine tests. |
 | What context window does the service report? | [context-size.mjs](context-size.mjs), [CONTEXT-SIZE.md](CONTEXT-SIZE.md) | Live model measurement; saved-report comparison is a separate mode. |
+| Which built-in plugins does the CLI load for this login? | [probe-builtin-plugins.mjs](probe-builtin-plugins.mjs) | Uses the real login; sends no user message, so no model request. |
 | Which query/account state owns logged usage? | [attrib.py](attrib.py), [EXTRA-USAGE-400.md](EXTRA-USAGE-400.md) | Investigation-specific attribution and historical findings. |
 
 ## Guides and historical reports
@@ -48,8 +49,9 @@ approved scope. See the qualification report before using an entry point.
 Generated `*.approved.json` and `*.live/` evidence are local and ignored by Git.
 Ignoring is not deletion: preserve sealed artifacts. An explicitly approved
 cleanup-only exception changed historical source/tests to remove the system `trash`
-requirement for owned temporary offline fixtures. Original code hashes identify the
-historical versions, not today's files; markers and live evidence stay unchanged,
+requirement for owned temporary offline fixtures. A second approved exception repinned the
+sealed harnesses to SDK 0.3.293 / CLI 2.1.293 so their offline tests run. Original
+code hashes identify the historical versions, not today's files; markers and live evidence stay unchanged,
 and closed allocations still cannot restart. Live cleanup keeps its `trash`
 requirement. Do not commit raw captures or private logs. Source, tests and reports
 remain trackable.

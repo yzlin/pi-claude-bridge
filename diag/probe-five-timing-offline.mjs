@@ -121,7 +121,7 @@ async function worker(mode) {
   const options = { cwd: process.env.HOME, model: "claude-sonnet-5-5", tools: [], strictMcpConfig: true, settingSources: [],
    permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true, verbatimPrompts: true,
    thinking: { type: "disabled" }, includePartialMessages: true, maxTurns: 1, promptSuggestions: false, hooks: {},
-   settings: { disableAllHooks: true, autoMemoryEnabled: false, includeGitInstructions: false, claudeMdExcludes: ["/**"], enabledPlugins: { "cc-plugin-agents-md@builtin": false } },
+   settings: { disableAllHooks: true, autoMemoryEnabled: false, includeGitInstructions: false, claudeMdExcludes: ["/**"], enabledPlugins: { "cc-plugin-agents-md@builtin": false, "cc-plugin-plugin-authoring@builtin": false } },
    systemPrompt: "Synthetic diagnostic. Otherwise reply only K. Never call the inert sentinel.", mcpServers: { "custom-tools": mcp },
    env: { ...process.env, ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.address().port}`, ANTHROPIC_API_KEY: KEY,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1",

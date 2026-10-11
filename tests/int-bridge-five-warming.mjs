@@ -53,9 +53,15 @@ if (!scenario) {
 			config.provider.forceTwoHundredK = [modelId];
 			writeFileSync(configPath, JSON.stringify(config));
 		}
-		// No test-local qualification additions: use the approved production lanes as-is.
+		// 5.5 is not production-qualified on SDK 0.3.293. This exact Team lane stands in
+		// for an approved one; the sources below must derive exactly this key.
 		const warming = await import("../src/cache-warming.ts");
-		const coordinator = new warming.CacheWarmingCoordinator({ qualified: warming.PRODUCTION_QUALIFIED_WARMING_MODELS });
+		const lane = warming.warmingQualificationKey({ model: { id: modelId }, cliModel, evidence: { sdkVersion: warming.WARMING_SDK_VERSION,
+			init: { claude_code_version: "2.1.293" }, usage: { provider: "firstParty", canonicalModel: modelId, costBasis: "list" },
+			account: { lane: JSON.stringify(["firstParty", "Claude Team", null, null]) } } });
+		assert.equal(warming.PRODUCTION_QUALIFIED_WARMING_MODELS.has(lane), false);
+		const qualified = new Set([lane]);
+		const coordinator = new warming.CacheWarmingCoordinator({ qualified });
 		globalThis[coordinatorKey] = coordinator; delete globalThis[ownerKey];
 		const { default: activate, __test: bridge } = await import("../src/index.ts");
 		const handlers = new Map();
@@ -108,8 +114,8 @@ if (!scenario) {
 		assert.equal(first.cliModel, cliModel);
 		assert.equal(h.queries[0].options.extraArgs.model, cliModel);
 		assert.equal(h.queries[0].options.verbatimPrompts, true);
-		assert.ok(warming.PRODUCTION_QUALIFIED_WARMING_MODELS.has(warming.warmingQualificationKey(first)),
-			"production must qualify this model/runtime/accounting lane without test additions");
+		assert.ok(qualified.has(warming.warmingQualificationKey(first)),
+			"the source must derive exactly the bare 5.5 Team model/runtime/accounting lane");
 		assert.equal(warming.accountEvidence(h.actualAccounts[0]).eligible, false,
 			"the ACTUAL fake-API-key SDK account must remain ineligible");
 		assert.notEqual(h.actualInits[0].apiKeySource, "none");
@@ -181,7 +187,7 @@ if (!scenario) {
 		assert.deepEqual(second.mcpTools, first.mcpTools);
 		assert.deepEqual(second.evidence.account, first.evidence.account);
 		assert.deepEqual(second.evidence.usage, first.evidence.usage);
-		assert.ok(warming.PRODUCTION_QUALIFIED_WARMING_MODELS.has(warming.warmingQualificationKey(second)));
+		assert.ok(qualified.has(warming.warmingQualificationKey(second)));
 		// Public SDK ModelUsage stays untouched: Opus may key/canonicalize the [1m] request.
 		for (const record of h.queries) {
 			assert.equal(record.options.extraArgs.model, cliModel);

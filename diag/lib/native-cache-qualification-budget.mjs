@@ -7,9 +7,12 @@ import { performance } from "node:perf_hooks";
 // native-cache-haiku-12q-20m-v1 (dated served id), native-cache-haiku-12q-20m-v2
 // (complete, but measured the old re-sent-prompt refresh). v3: 3 models x 2 matrix
 // starts (seed, refresh) + 2 Haiku expiry comparisons x 5 starts (warm seed, control
-// seed, refresh, 2 followups) = 16.
-export const APPROVAL = Object.freeze({ id: "native-cache-3m-16q-25m-v3", sdkStarts: 16, elapsedMs: 1_500_000 });
-export const COHORT = Object.freeze(["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"]);
+// seed, refresh, 2 followups) = 16; sealed after Sonnet refused. v4 requalifies
+// Haiku alone on SDK 0.3.293: 1 x 2 matrix starts + 2 x 5 expiry starts = 12.
+// v4 sealed at the account gate (no login without USER, zero HTTP). v5 sealed after
+// one seed: the Team-seated sec-default built-in failed source isolation. v6 reruns it.
+export const APPROVAL = Object.freeze({ id: "native-cache-haiku-12q-25m-v6", sdkStarts: 12, elapsedMs: 1_500_000 });
+export const COHORT = Object.freeze(["claude-haiku-4-5"]);
 // The refresh turn is a fixed "." plus CC's small reminders; v2 wrote ~13.3k here
 // when it re-sent the source prompt. A pass requires the tail write to stay tiny.
 export const REFRESH_WRITE_LIMIT = 1024;
@@ -26,7 +29,7 @@ export function parseArgs(args) {
 // inherited controls must be reviewed, not silently scrubbed into qualification.
 export function guardEnvironment(env) {
 	const plain = new Set(["HOME", "PATH", "TMPDIR", "TMP", "TEMP", "USER", "LOGNAME", "SHELL", "PWD", "OLDPWD", "SHLVL", "_", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "XPC_FLAGS", "XPC_SERVICE_NAME", "__CFBundleIdentifier", "__CF_USER_TEXT_ENCODING", "COMMAND_MODE", "NO_COLOR"]);
-	const exact = { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1", CLAUDE_AGENT_SDK_VERSION: "0.3.285" };
+	const exact = { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1", CLAUDE_AGENT_SDK_VERSION: "0.3.293" };
 	for (const [key, value] of Object.entries(env)) {
 		if (plain.has(key) || (Object.hasOwn(exact, key) && value === exact[key])) continue;
 		throw new Error("unsafe ambient environment"); // never echo names/values
@@ -73,7 +76,7 @@ export class BudgetOwner {
 	}
 	reserve(partition, model) {
 		this.check();
-		const limits = { matrix: 6, expiry: 10, followup: 0 };
+		const limits = { matrix: 2, expiry: 10, followup: 0 };
 		if (!COHORT.includes(model) || !Object.hasOwn(limits, partition) || this.state.reserved >= APPROVAL.sdkStarts || this.state.partitions[partition] >= limits[partition]) throw new Error("allocation exhausted or invalid");
 		const id = this.state.reserved++;
 		this.state.partitions[partition]++;

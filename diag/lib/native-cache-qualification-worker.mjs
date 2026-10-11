@@ -94,7 +94,7 @@ async function initialize({ offline, model: modelId, nonce, cwd, offlineFault, d
 	});
 	// Must follow SDK instrumentation: both production imports see the wrapper.
 	warming = await import("../../src/cache-warming.ts");
-	assert.equal(warming.WARMING_SDK_VERSION, "0.3.285");
+	assert.equal(warming.WARMING_SDK_VERSION, "0.3.293");
 	const qualified = new Set(), coordinator = new warming.CacheWarmingCoordinator({ qualified });
 	globalThis[Symbol.for("claude-bridge:cacheWarmingCoordinator")] = coordinator;
 	delete globalThis[Symbol.for("claude-bridge:activeStreamSimple")];
@@ -152,7 +152,7 @@ async function initialize({ offline, model: modelId, nonce, cwd, offlineFault, d
 				assert.equal(snapshot.owner, provider.streamSimple); assert.deepEqual(snapshot.context, context);
 				assert.ok(Object.isFrozen(snapshot.context)); assert.equal(snapshot.settingSources, undefined);
 				assert.ok(warming.preflightRuntime(snapshot.settings).ok);
-				assert.equal(snapshot.evidence.init.claude_code_version, "2.1.285");
+				assert.equal(snapshot.evidence.init.claude_code_version, "2.1.293");
 				assert.equal(snapshot.evidence.sourceCachedTokens, sourceResult.usage.cacheRead + sourceResult.usage.cacheWrite);
 				qualified.add(warming.warmingQualificationKey(snapshot)); // diagnostic ONLY, derived AFTER actual completion
 				if (!offline) {
@@ -172,7 +172,7 @@ async function initialize({ offline, model: modelId, nonce, cwd, offlineFault, d
 					cacheRead: sourceRecord.sdkUsage.cache_read_input_tokens, cacheWrite: sourceRecord.sdkUsage.cache_creation_input_tokens,
 				});
 				return { kind: "seed", requestAt: h.records[0].requestAt, sdk: warming.WARMING_SDK_VERSION, pi: piVersion,
-					cli: snapshot.evidence.init.claude_code_version, initApiKeySource: snapshot.evidence.init.apiKeySource, cliModel: snapshot.cliModel, servedModel: snapshot.evidence.servedModel,
+					cli: snapshot.evidence.init.claude_code_version, initApiKeySource: snapshot.evidence.init.apiKeySource, initPlugins: (snapshot.evidence.init.plugins ?? []).map(p => p?.source ?? null), cliModel: snapshot.cliModel, servedModel: snapshot.evidence.servedModel,
 					backend: snapshot.evidence.usage.provider, canonicalModel: snapshot.evidence.usage.canonicalModel, pricing: snapshot.evidence.usage.costBasis,
 					accountLane: snapshot.evidence.account.lane, cachedTokens: snapshot.evidence.sourceCachedTokens,
 					runtimeHash: hash(snapshot.settings), contextHash: hash(context), sourceHash: initialBytes,
