@@ -2182,6 +2182,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// Manual /compact in CC still works (we never invoke it).
 	const cacheRetention = resolvePiCacheRetention(options);
 	const cacheControls = providerCacheControls(claudeChildEnv(providerSettings), cacheRetention);
+	const thinkingOptions = providerThinkingOptions(options?.reasoning, effort);
 	const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
 		cwd,
 		env: cacheControls.env,
@@ -2203,7 +2204,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 			append: systemPromptAppend ? systemPromptAppend : undefined,
 		},
 		extraArgs,
-		...providerThinkingOptions(options?.reasoning, effort),
+		...thinkingOptions,
 		// Pi owns user prompt composition; match the live-qualified 5.5 fork.
 		...(["claude-sonnet-5-5", "claude-opus-5-5[1m]"].includes(cliModel) ? { verbatimPrompts: true } : {}),
 		...(mcpServers ? { mcpServers } : {}),
@@ -2351,6 +2352,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 						processFingerprint,
 						systemPrompt: queryOptions.systemPrompt,
 						verbatimPrompts: queryOptions.verbatimPrompts,
+						thinkingOptions,
 						mcpTools,
 						settings: runtimeSettings,
 						cwd,

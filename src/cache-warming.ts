@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { providerCacheControls, resolvePiCacheRetention } from "./cache-policy.js";
+import { providerCacheControls, resolvePiCacheRetention, type providerThinkingOptions } from "./cache-policy.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,7 +80,8 @@ export const REFRESH_PROMPT = ".";
 export function warmingQualificationKey(source: WarmingSource): string {
 	return identity(["budget-max-tokens-tiny-prompt-v2", source.model.id, source.cliModel, source.evidence.sdkVersion,
 		source.evidence.init.claude_code_version, source.evidence.usage.provider,
-		source.evidence.usage.canonicalModel, source.evidence.usage.costBasis, source.evidence.account.lane]);
+		source.evidence.usage.canonicalModel, source.evidence.usage.costBasis, source.evidence.account.lane,
+		source.thinkingOptions]);
 }
 
 export type WarmingEvidence = {
@@ -107,6 +108,10 @@ export type WarmingSource = {
 	systemPrompt: NonNullable<Parameters<typeof sdkQuery>[0]["options"]>["systemPrompt"];
 	/** Actual ordinary SDK option; refresh must preserve it. */
 	verbatimPrompts?: boolean;
+	/** Actual ordinary SDK thinking options; the refresh replays them. A thinking-off
+	 *  refresh after a thinking-on turn missed the tail of an Opus 5.5 prefix
+	 *  (diag/probe-opus-thinking-refresh.mjs); a matching one read all of it. */
+	thinkingOptions: ReturnType<typeof providerThinkingOptions>;
 	mcpTools: Tool[];
 	settings: RuntimeSettings;
 	cwd?: string;
@@ -141,8 +146,9 @@ export function preflightRuntime(runtime: RuntimeSettings): { ok: true } | { ok:
 	// fetched (tests/int-warming-user-settings-offline.mjs).
 	const supported = new Set(["autoMemoryEnabled", "disableAllHooks", "includeGitInstructions", "claudeMdExcludes", "promptCacheTtl",
 		"theme", "tui", "statusLine", "model", "attribution", "extraKnownMarketplaces"]);
-	// Settings-file env names the same contract test shows leave the tool-less,
-	// thinking-disabled refresh wire and side effects unchanged. Exact names only.
+	// Settings-file env names the same contract test shows leave the tool-less refresh
+	// wire and side effects unchanged. Exact names only. MAX_THINKING_TOKENS is inert
+	// only on a thinking-disabled refresh; isolatedSource refuses it otherwise.
 	const inertSettingsEnv = new Set(["MAX_THINKING_TOKENS", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"]);
 	// Permission rules are inert with no tools; modes and extra directories are not.
 	const permissionRules = new Set(["allow", "deny", "ask"]);
@@ -207,8 +213,15 @@ function allowedInitPlugins(plugins: unknown[]): boolean {
 
 function isolatedSource(source: Readonly<WarmingSource>): boolean {
 	const init = source.evidence.init;
-	if (source.pathToClaudeCodeExecutable || Object.keys(source.extraArgs ?? {}).some(key => key !== "model" && key !== "strict-mcp-config")) return false;
+	// The bridge adds thinking-display with every effort; the refresh replays the same extraArgs.
+	const display = (key: string) => key === "thinking-display" && source.extraArgs?.[key] === "summarized" && "effort" in (source.thinkingOptions ?? {});
+	if (source.pathToClaudeCodeExecutable || Object.keys(source.extraArgs ?? {}).some(key => key !== "model" && key !== "strict-mcp-config" && !display(key))) return false;
 	if (source.extraArgs?.["strict-mcp-config"] !== null || source.env.ENABLE_CLAUDEAI_MCP_SERVERS !== "0") return false;
+	// Thinking-enabled refreshes replay adaptive thinking, which MAX_THINKING_TOKENS=0 in
+	// settings-file or process env switches off (tests/int-warming-user-settings-offline.mjs).
+	const thinkingOff = !!source.thinkingOptions && "thinking" in source.thinkingOptions && source.thinkingOptions.thinking.type === "disabled";
+	if (!thinkingOff && [source.env, ...[source.settings.effective, source.settings.resolvedEffective, ...(source.settings.sources ?? []).map(s => s.settings)].map(s => s?.env)]
+		.some(env => !!env && typeof env === "object" && Object.hasOwn(env, "MAX_THINKING_TOKENS"))) return false;
 	if (Object.entries(source.env).some(([key, value]) => value && key !== "CLAUDE_CODE_PROMPT_CACHE_TTL" && !(key === "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" && value === "1") && /^(ANTHROPIC_|AWS_|BEDROCK_|GOOGLE_|VERTEX_|AZURE_|FOUNDRY_|MANTLE_|CLAUDE_CODE_|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|HTTPS?_PROXY|ALL_PROXY)/i.test(key))) return false;
 	if (!Array.isArray(init.plugins) || !allowedInitPlugins(init.plugins) || !Array.isArray(init.mcp_servers) || !Array.isArray(init.tools)) return false;
 	const servers = source.mcpTools.length ? [{ name: MCP_SERVER_NAME, status: "connected", source: "sdk" }] : [];
@@ -279,7 +292,7 @@ export class CacheWarmingCoordinator {
 	complete(generation: number, source: WarmingSource, resetSourceSequence = false): void {
 		if (generation !== this.generation || source.owner !== this.owner) return;
 		this.sourcePending = false;
-		if (source.retention === "none" || source.reasoning) { this.sourceSequence = undefined; return; }
+		if (source.retention === "none") { this.sourceSequence = undefined; return; }
 		if (resetSourceSequence) this.sourceSequence = undefined;
 		try {
 			const { owner, ...data } = source;
@@ -311,7 +324,8 @@ export class CacheWarmingCoordinator {
 		if (!source || this.failedGeneration === source.generation || !candidate.idle) return "stop";
 		if (!candidate.piSessionId || candidate.piSessionId !== source.requestOptions?.sessionId) return "stop";
 		if (candidate.owner !== source.owner || !sameIdentity(candidate.model, source.model)) return "stop";
-		if (candidate.reasoning || source.reasoning || candidate.retention === "none" || candidate.retention !== source.retention) return "stop";
+		if (candidate.reasoning !== source.reasoning || !source.thinkingOptions
+			|| candidate.retention === "none" || candidate.retention !== source.retention) return "stop";
 		if (!this.qualified.has(warmingQualificationKey(source)) || !subscriptionEvidence(source.evidence, source.cliModel)) return "stop";
 		if ((source.model.id === "claude-sonnet-5-5" || source.model.id === "claude-opus-5-5")
 			&& (source.sourceQueryCount < 2 || source.verbatimPrompts !== true || source.retention !== "short"
@@ -448,7 +462,7 @@ export async function runIsolatedRefresh(
 				model: source.cliModel, extraArgs: source.extraArgs, tools: [], strictMcpConfig: true,
 				permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
 				includePartialMessages: true, maxTurns: 1, maxBudgetUsd: 0.000001,
-				abortController: controller, thinking: { type: "disabled" },
+				abortController: controller, ...source.thinkingOptions,
 				systemPrompt: source.systemPrompt,
 				...(source.verbatimPrompts === true ? { verbatimPrompts: true } : {}),
 				settings: { ...source.flagSettings, disableAllHooks: true, autoMemoryEnabled: false }, hooks: {},
@@ -509,15 +523,20 @@ export async function runIsolatedRefresh(
 						if (event.usage.cache_read_input_tokens != null) usage.cacheRead = event.usage.cache_read_input_tokens;
 						if (event.usage.cache_creation_input_tokens != null) usage.cacheWrite = event.usage.cache_creation_input_tokens;
 						stopReason = event.delta.stop_reason;
-					} else if (event.type === "content_block_start" && event.content_block.type === "tool_use") return failed("refresh attempted a tool");
+					} else if (event.type === "content_block_start") {
+						if (event.content_block.type === "tool_use") return failed("refresh attempted a tool");
+						if (event.content_block.type !== "text" && event.content_block.type !== "thinking") return failed("unexpected refresh assistant");
+					}
 				} else if (message.type === "assistant") {
+					// Opus 5.5 on SDK 0.3.293 publishes no assistant message for its one-token
+					// refresh (diag/probe-opus-thinking-refresh.mjs); Haiku publishes one.
 					if (++assistants !== 1 || message.message.model !== source.evidence.servedModel
-						|| message.message.content.some(block => block.type !== "text")) return failed("unexpected refresh assistant");
+						|| message.message.content.some(block => block.type !== "text" && block.type !== "thinking")) return failed("unexpected refresh assistant");
 					// SDK may publish an unfinished assistant before the authoritative message_delta.
 					if (message.message.stop_reason != null && message.message.stop_reason !== "max_tokens") return failed("unqualified refresh stop reason");
 				} else if (message.type === "result") {
 					const accounting = selectModelUsage(message.modelUsage, source.evidence.servedModel, source.cliModel);
-					if (message.subtype !== "error_max_budget_usd" || stopReason !== "max_tokens" || requests !== 1 || assistants !== 1
+					if (message.subtype !== "error_max_budget_usd" || stopReason !== "max_tokens" || requests !== 1 || assistants > 1
 						|| usage?.output !== 1 || identity(accounting) !== identity(source.evidence.usage)) return failed("unqualified refresh result");
 					// No guessed tolerance: uncached input is NOT part of this baseline.
 					if (usage.cacheRead < source.evidence.sourceCachedTokens!) return failed("refresh prefix cache miss");
@@ -546,9 +565,16 @@ export async function runIsolatedRefresh(
 
 // Exact live-proven lanes, explicitly approved for native integration.
 // Haiku: native-cache-haiku-v6 matrix + two expiry comparisons on SDK 0.3.293.
-// 5.5 passed five-expiry-v2 on SDK 0.3.285 only and is not requalified; the
-// 5.5 rules in decide() stay for a future lane.
+// Opus 5.5 on Claude Max: native-cache-opus-thinking-v1, one expiry comparison per
+// Pi thinking level (bridge thinking options below) on SDK 0.3.293. Sonnet 5.5 and
+// Opus 5.5 on other plans are not requalified.
+const OPUS_5_5_THINKING_LANES: ReturnType<typeof providerThinkingOptions>[] = [
+	{ thinking: { type: "disabled" } }, {}, { effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }, { effort: "max" },
+];
 export const PRODUCTION_QUALIFIED_WARMING_MODELS: ReadonlySet<string> = new Set([
 	identity(["budget-max-tokens-tiny-prompt-v2", "claude-haiku-4-5", "claude-haiku-4-5", "0.3.293", "2.1.293",
-		"firstParty", "claude-haiku-4-5", "list", identity(["firstParty", "Claude Team", null, null])]),
+		"firstParty", "claude-haiku-4-5", "list", identity(["firstParty", "Claude Team", null, null]),
+		{ thinking: { type: "disabled" } }]),
+	...OPUS_5_5_THINKING_LANES.map(thinkingOptions => identity(["budget-max-tokens-tiny-prompt-v2", "claude-opus-5-5", "claude-opus-5-5[1m]",
+		"0.3.293", "2.1.293", "firstParty", "claude-opus-5-5", "list", identity(["firstParty", "Claude Max", null, null]), thinkingOptions])),
 ]);

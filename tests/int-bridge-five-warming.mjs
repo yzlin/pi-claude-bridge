@@ -56,7 +56,7 @@ if (!scenario) {
 		// 5.5 is not production-qualified on SDK 0.3.293. This exact Team lane stands in
 		// for an approved one; the sources below must derive exactly this key.
 		const warming = await import("../src/cache-warming.ts");
-		const lane = warming.warmingQualificationKey({ model: { id: modelId }, cliModel, evidence: { sdkVersion: warming.WARMING_SDK_VERSION,
+		const lane = warming.warmingQualificationKey({ model: { id: modelId }, cliModel, thinkingOptions: { thinking: { type: "disabled" } }, evidence: { sdkVersion: warming.WARMING_SDK_VERSION,
 			init: { claude_code_version: "2.1.293" }, usage: { provider: "firstParty", canonicalModel: modelId, costBasis: "list" },
 			account: { lane: JSON.stringify(["firstParty", "Claude Team", null, null]) } } });
 		assert.equal(warming.PRODUCTION_QUALIFIED_WARMING_MODELS.has(lane), false);

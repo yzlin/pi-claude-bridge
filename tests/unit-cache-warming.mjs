@@ -38,7 +38,7 @@ process.on("exit", () => rmSync(fixtureDir, { recursive: true, force: true }));
 const source = {
 	requestOptions: { sessionId: "pi-session" }, processFingerprint: warmingControlsFingerprint(undefined),
 	sourceTranscript: { path: fixturePath, bytesBase64: Buffer.from("synthetic-source").toString("base64") },
-	owner: "owner", model, cliModel: model.id, reasoning: undefined, retention: "short", sessionId: "session",
+	owner: "owner", model, cliModel: model.id, reasoning: undefined, thinkingOptions: { thinking: { type: "disabled" } }, retention: "short", sessionId: "session",
 	context: { systemPrompt: "system", messages: [{ role: "user", content: "hello", timestamp: 1 }], tools: [] },
 	systemPrompt: { type: "preset", preset: "claude_code", append: "safe" },
 	mcpTools: [], settings: safeRuntime, env: { SAFE: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "0" }, extraArgs: { "strict-mcp-config": null }, evidence,
@@ -169,9 +169,66 @@ describe("native cache warming contract", () => {
 		assert.throws(() => { calls[0].context.messages[0].content = "changed"; }, TypeError);
 	});
 
-	it("rejects thinking, wrong auth/runtime/accounting, active work, stale generations and suppresses failed repeats", async () => {
+	it("admits a thinking source whose refresh replays its exact thinking options", async () => {
+		const thinking = { ...source, reasoning: "high", requestOptions: { ...source.requestOptions, reasoning: "high" }, thinkingOptions: { effort: "high" } };
+		const c = new CacheWarmingCoordinator({ qualified: new Set([warmingQualificationKey(thinking)]), refresh: async () => ({ kind: "success", usage: {} }) });
+		c.complete(c.begin("owner"), thinking);
+		assert.equal(c.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, reasoning: "medium", retention: "short", runtime: safeRuntime }), "stop", "changed thinking level");
+		assert.equal(c.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, reasoning: undefined, retention: "short", runtime: safeRuntime }), "stop", "thinking switched off");
+		assert.equal(c.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, reasoning: "high", retention: "short", runtime: safeRuntime }), "warm");
+		const offLane = new CacheWarmingCoordinator({ qualified: new Set([warmingQualificationKey(source)]) });
+		offLane.complete(offLane.begin("owner"), thinking);
+		assert.equal(offLane.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, reasoning: "high", retention: "short", runtime: safeRuntime }), "stop", "thinking-off qualification does not admit a thinking lane");
+		const missing = new CacheWarmingCoordinator({ qualified: new Set([warmingQualificationKey({ ...source, thinkingOptions: undefined })]) });
+		missing.complete(missing.begin("owner"), { ...source, thinkingOptions: undefined });
+		assert.equal(missing.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, retention: "short", runtime: safeRuntime }), "stop", "unknown source thinking options");
+	});
+
+	it("admits settings-file MAX_THINKING_TOKENS only when the refresh disables thinking", async () => {
+		// "0" turns adaptive thinking off on the wire (tests/int-warming-user-settings-offline.mjs).
+		const flags = { ...cacheFlags("short"), disableAllHooks: true, autoMemoryEnabled: false };
+		const file = { env: { MAX_THINKING_TOKENS: "0" } };
+		for (const [where, settings] of [["resolved", { effective: { autoMemoryEnabled: false, ...file }, resolvedEffective: { autoMemoryEnabled: false, ...file }, sources: [] }],
+			["source", { effective: { autoMemoryEnabled: false }, resolvedEffective: { autoMemoryEnabled: false }, sources: [{ source: "user", settings: file }] }]]) {
+			const runtime = warmingRuntime(settings, flags);
+			assert.equal(preflightRuntime(runtime).ok, true, where);
+			for (const [reasoning, thinkingOptions] of [[undefined, { thinking: { type: "disabled" } }], ["minimal", {}], ["high", { effort: "high" }]]) {
+				const lane = { ...source, reasoning, requestOptions: { ...source.requestOptions, reasoning }, thinkingOptions, settings: runtime, flagSettings: flags };
+				const c = new CacheWarmingCoordinator({ qualified: new Set([warmingQualificationKey(lane)]), refresh: async () => ({ kind: "success", usage: {} }) });
+				c.complete(c.begin("owner"), lane);
+				const off = reasoning === undefined;
+				assert.equal(c.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, reasoning, retention: "short", runtime }), off ? "warm" : "stop", `${where} ${JSON.stringify(thinkingOptions)}`);
+				if (off) continue;
+				let queried = false;
+				assert.deepEqual(await runIsolatedRefresh(lane, new AbortController().signal, {
+					resolveSettings: async () => settings, query: () => { queried = true; throw new Error("must not query"); },
+				}), { kind: "failed", reason: "source isolation is unverified" }, `${where} ${JSON.stringify(thinkingOptions)}`);
+				assert.equal(queried, false);
+			}
+		}
+	});
+
+	it("admits process-env MAX_THINKING_TOKENS only when the refresh disables thinking", async () => {
+		// claudeChildEnv copies process.env, so a shell export reaches the source and refresh.
+		for (const value of ["0", "2048"]) {
+			for (const [reasoning, thinkingOptions] of [[undefined, { thinking: { type: "disabled" } }], ["minimal", {}], ["high", { effort: "high" }]]) {
+				const lane = { ...source, reasoning, requestOptions: { ...source.requestOptions, reasoning }, thinkingOptions, env: { ...source.env, MAX_THINKING_TOKENS: value } };
+				const c = new CacheWarmingCoordinator({ qualified: new Set([warmingQualificationKey(lane)]), refresh: async () => ({ kind: "success", usage: {} }) });
+				c.complete(c.begin("owner"), lane);
+				const off = reasoning === undefined;
+				assert.equal(c.decide({ owner: "owner", piSessionId: "pi-session", model, idle: true, reasoning, retention: "short", runtime: safeRuntime }), off ? "warm" : "stop", `${value} ${JSON.stringify(thinkingOptions)}`);
+				if (off) continue;
+				let queried = false;
+				assert.deepEqual(await runIsolatedRefresh(lane, new AbortController().signal, {
+					resolveSettings: async () => safeRuntime, query: () => { queried = true; throw new Error("must not query"); },
+				}), { kind: "failed", reason: "source isolation is unverified" }, `${value} ${JSON.stringify(thinkingOptions)}`);
+				assert.equal(queried, false);
+			}
+		}
+	});
+
+	it("rejects wrong auth/runtime/accounting, active work, stale generations and suppresses failed repeats", async () => {
 		for (const bad of [
-			{ reasoning: "high" },
 			{ idle: false },
 			{ retention: "none" },
 			{ evidence: { ...evidence, account: { ...evidence.account, eligible: false } } },
@@ -319,6 +376,40 @@ describe("refresh safety adapter", () => {
 		assert.equal(options.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
 		assert.equal(suppressedSource.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
 		assert.equal(closed, 1);
+	});
+
+	it("replays the source's effort and accepts a one-token thinking reply", async () => {
+		let options;
+		const messages = [
+			{ type: "system", subtype: "init", session_id: "11111111-1111-4111-8111-111111111111", ...evidence.init },
+			{ type: "stream_event", event: { type: "message_start", message: { model: model.id, usage: { input_tokens: 2, cache_read_input_tokens: 8, cache_creation_input_tokens: 1, output_tokens: 0 } } } },
+			{ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } } },
+			{ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 1 } } },
+			{ type: "assistant", message: { model: model.id, content: [{ type: "thinking", thinking: "x", signature: "" }], stop_reason: "max_tokens" } },
+			{ type: "result", subtype: "error_max_budget_usd", errors: ["budget"], modelUsage: { [model.id]: evidence.usage } },
+		];
+		const result = await runIsolatedRefresh({ ...source, reasoning: "high", thinkingOptions: { effort: "high" } }, new AbortController().signal, {
+			resolveSettings: async () => ({ effective: safeRuntime.effective, sources: safeRuntime.sources, provenance: {} }),
+			query: ({ options: o }) => { options = o; return { accountInfo: async () => rawAccount, async *[Symbol.asyncIterator]() { yield* messages; }, close() {} }; },
+		});
+		assert.equal(result.kind, "success");
+		assert.equal(options.effort, "high"); assert.equal(Object.hasOwn(options, "thinking"), false);
+		assert.equal(options.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "1");
+	});
+
+	it("accepts a refresh with no published assistant but refuses unexpected streamed blocks", async () => {
+		const run = blockType => runIsolatedRefresh(source, new AbortController().signal, {
+			resolveSettings: async () => ({ effective: safeRuntime.effective, sources: safeRuntime.sources, provenance: {} }),
+			query: () => ({ accountInfo: async () => rawAccount, close() {}, async *[Symbol.asyncIterator]() {
+				yield { type: "system", subtype: "init", session_id: "11111111-1111-4111-8111-111111111111", ...evidence.init };
+				yield { type: "stream_event", event: { type: "message_start", message: { model: model.id, usage: { input_tokens: 2, cache_read_input_tokens: 8, cache_creation_input_tokens: 1, output_tokens: 0 } } } };
+				yield { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: blockType } } };
+				yield { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 1 } } };
+				yield { type: "result", subtype: "error_max_budget_usd", errors: ["budget"], modelUsage: { [model.id]: evidence.usage } };
+			} }),
+		});
+		assert.equal((await run("thinking")).kind, "success");
+		assert.deepEqual(await run("server_tool_use"), { kind: "failed", reason: "unexpected refresh assistant" });
 	});
 });
 
@@ -864,17 +955,24 @@ describe("qualification declarations and late completion", () => {
 		const declaration = readFileSync(join(dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"))), "sdk.d.ts"), "utf8");
 		const usage = declaration.slice(declaration.indexOf("export declare type ModelUsage ="), declaration.indexOf("export declare type ModelUsage =") + 3500);
 		assert.match(usage, /API provider that served this model \(e\.g\. 'firstParty'/);
-		assert.equal(PRODUCTION_QUALIFIED_WARMING_MODELS.size, 1);
+		assert.equal(PRODUCTION_QUALIFIED_WARMING_MODELS.size, 8);
 	});
-	it("qualifies only the explicitly approved Haiku lane, nothing adjacent", async () => {
+	it("qualifies only the explicitly approved Haiku and Opus 5.5 thinking lanes, nothing adjacent", async () => {
 		const { PRODUCTION_QUALIFIED_WARMING_MODELS: production } = await import("../src/cache-warming.js");
-		const key = ({ model = "claude-haiku-4-5", cliModel = model, sdk = "0.3.293", cli = "2.1.293", provider = "firstParty", canonical = model, costBasis = "list", plan = "Claude Team" } = {}) =>
-			warmingQualificationKey({ model: { id: model }, cliModel, evidence: { sdkVersion: sdk, init: { claude_code_version: cli },
+		const key = ({ model = "claude-haiku-4-5", cliModel = model, sdk = "0.3.293", cli = "2.1.293", provider = "firstParty", canonical = model, costBasis = "list", plan = "Claude Team", thinkingOptions = { thinking: { type: "disabled" } } } = {}) =>
+			warmingQualificationKey({ model: { id: model }, cliModel, thinkingOptions, evidence: { sdkVersion: sdk, init: { claude_code_version: cli },
 				usage: { provider, canonicalModel: canonical, costBasis }, account: { lane: JSON.stringify(["firstParty", plan, null, null]) } } });
-		assert.deepEqual([...production], [key()]);
+		const opus = { model: "claude-opus-5-5", cliModel: "claude-opus-5-5[1m]", plan: "Claude Max" };
+		const opusLanes = [{ thinking: { type: "disabled" } }, {}, ...["low", "medium", "high", "xhigh", "max"].map(effort => ({ effort }))];
+		assert.deepEqual([...production], [key(), ...opusLanes.map(thinkingOptions => key({ ...opus, thinkingOptions }))]);
+		for (const change of [{ plan: "Claude Team" }, { plan: "Claude Pro" }, { cliModel: "claude-opus-5-5" }, { model: "claude-sonnet-5-5", cliModel: "claude-sonnet-5-5" },
+			{ sdk: "0.3.294" }, { cli: "2.1.294" }, { thinkingOptions: { effort: "minimal" } }, { thinkingOptions: { effort: "high", thinking: { type: "adaptive" } } }]) {
+			assert.equal(production.has(key({ ...opus, thinkingOptions: { effort: "high" }, ...change })), false, JSON.stringify(change));
+		}
 		for (const change of [{ model: "claude-sonnet-5-5" }, { model: "claude-opus-5-5", cliModel: "claude-opus-5-5[1m]" }, { model: "claude-sonnet-4-6" },
 			{ sdk: "0.3.285", cli: "2.1.285" }, { sdk: "0.3.294" }, { cli: "2.1.294" },
-			{ plan: "Claude Max" }, { plan: "Claude Pro" }, { provider: "bedrock" }, { costBasis: "other" }]) assert.equal(production.has(key(change)), false, JSON.stringify(change));
+			{ plan: "Claude Max" }, { plan: "Claude Pro" }, { provider: "bedrock" }, { costBasis: "other" },
+			{ thinkingOptions: { effort: "high" } }, { thinkingOptions: {} }]) assert.equal(production.has(key(change)), false, JSON.stringify(change));
 	});
 	it("ignores an old successful refresh after new work without suppressing the newer snapshot", async () => {
 		let finish;

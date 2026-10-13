@@ -1,5 +1,5 @@
 ---
-summary: "Haiku Team native lane on SDK 0.3.293; earlier 5.5 Team lanes and sealed SDK expiry comparisons on 0.3.285, and offline native integration evidence."
+summary: "Haiku Team and Opus 5.5 Max thinking native lanes on SDK 0.3.293; earlier 5.5 Team lanes and sealed SDK expiry comparisons on 0.3.285, and offline native integration evidence."
 read_when:
   - "Changing model eligibility or cache-warming SDK options"
   - "Interpreting native cache hits, tool-source wire divergence, or sealed diagnostic allowances"
@@ -7,7 +7,64 @@ read_when:
 
 # Native cache qualification — exact Haiku and conservative 5.5 Team lanes
 
-## Current: Haiku requalified on SDK 0.3.293; 5.5 not requalified
+## Current: Opus 5.5 qualified at every thinking level on Claude Max (SDK 0.3.293)
+
+The user asked for Opus 5.5 warming at any Pi thinking level and approved the live
+spend. `PRODUCTION_QUALIFIED_WARMING_MODELS` now also holds seven Opus 5.5 lanes:
+`claude-opus-5-5[1m]` / Claude Max / SDK 0.3.293 / CLI 2.1.293 / firstParty/list, one
+per bridge thinking option. The qualification key now includes the source query's SDK
+thinking options, so each thinking level is a separate lane. The Haiku lane is
+unchanged; its key carries `thinking: disabled`.
+
+| Pi level | Source SDK options | Wire (observed) |
+|---|---|---|
+| off | `thinking: { type: "disabled" }` | no `thinking`, `effort: medium` (CC default) |
+| minimal | neither (pi-ai maps it to null) | adaptive, `effort: medium` (CC default) |
+| low … max | `effort: <level>` | adaptive, `effort: <level>` |
+
+**Mechanism probe** (`probe-opus-thinking-refresh.mjs`, direct SDK, 21 live queries,
+not a qualification). Per effort: a seed with effort on, then two one-token forks.
+
+- A thinking-off refresh read the full prefix when the seed reply had a thinking
+  block. When the model chose not to think, it read about 364 tokens less than the
+  seed wrote (50 441 / 50 804 at low, 52 016 / 52 380 at medium), although the
+  messages were identical. Only `thinking` and `context_management` differed.
+- An effort-matched refresh read the full prefix in every case. The API accepts
+  `max_tokens: 1` with adaptive thinking; output stayed at one token, stop `max_tokens`.
+- The SDK published **no assistant message** for either one-token Opus refresh. The
+  refresh validator required exactly one, which would have refused every Opus refresh.
+
+Code changes: the snapshot stores `thinkingOptions` and the refresh replays them
+(instead of a fixed `thinking: disabled`). `decide()` requires the same Pi thinking
+level as the source. `isolatedSource()` accepts `thinking-display: summarized` only
+with an effort source. The refresh accepts zero or one assistant message and checks
+streamed `content_block_start` types (text or thinking only).
+
+**Live qualification** `native-cache-opus-thinking-49q-30m-v1`
+(`qualify-opus-thinking-warming.mjs`, code hash `da2c7b82…`, evidence in
+`native-cache-opus-thinking-v1.live/`). The run used the real bridge and the Pi 0.99.1
+warmer, which is byte-identical to Pi 1.2.0's. Per lane: a warm arm (two sources,
+refresh, followup) and a control arm (two sources, followup), lanes 40 s apart.
+**Complete: 49 SDK starts, 49 HTTP, all 7 lanes passed.** Every refresh was a native
+`warm` decision, one output token, stop `max_tokens`, and replayed the source wire
+`thinking`/`effort`.
+
+| Lane | Source cached | Refresh read / write (240 s) | Warm followup read (~370 s) | Control read / write |
+|---|---|---|---|---|
+| off | 22 706 | 22 706 / 32 | 22 706 | 0 / 22 731 |
+| minimal | 22 712 | 22 712 / 32 | 22 712 | 0 / 22 724 |
+| low | 22 722 | 22 722 / 32 | 22 722 | 0 / 22 725 |
+| medium | 22 709 | 22 709 / 32 | 22 709 | 0 / 22 739 |
+| high | 22 698 | 22 698 / 32 | 22 698 | 0 / 22 730 |
+| xhigh | 22 698 | 22 698 / 32 | 22 698 | 0 / 22 763 |
+| max | 22 764 | 22 764 / 51 | 22 764 | 0 / 22 805 |
+
+Limits: one comparison per lane. The account was Claude Max with no seated plugins;
+Opus on Team, Pro or Enterprise and Sonnet 5.5 stay gated. The production code hash
+changed after the run (the lanes were added), so the marker cannot authorize a rerun.
+Quota savings remain unknown.
+
+## Earlier: Haiku requalified on SDK 0.3.293; 5.5 not requalified
 
 Upstream moved the SDK to `^0.3.293` (CLI 2.1.293). Every lane was pinned to 0.3.285,
 so warming stopped. The user approved requalifying Haiku only.

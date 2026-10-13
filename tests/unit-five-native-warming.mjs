@@ -25,7 +25,7 @@ function source(id = "claude-opus-5-5") {
     context: { systemPrompt: "synthetic", messages: [{ role: "user", content: "hello", timestamp: 1 }], tools: [] },
     systemPrompt: { type: "preset", preset: "claude_code", append: "synthetic" }, mcpTools: [],
     settings, env: { ENABLE_CLAUDEAI_MCP_SERVERS: "0" }, extraArgs: { "strict-mcp-config": null },
-    processFingerprint: warmingControlsFingerprint(undefined), verbatimPrompts: true,
+    processFingerprint: warmingControlsFingerprint(undefined), verbatimPrompts: true, thinkingOptions: { thinking: { type: "disabled" } },
     evidence: { account: accountEvidence(account), sdkVersion: WARMING_SDK_VERSION, servedModel: id,
       init: { claude_code_version: "2.1.293", apiKeySource: "none", tools: [], mcp_servers: [], plugins: [] },
       usage: { provider: "firstParty", canonicalModel: id, costBasis: "list" }, sourceCachedTokens: 7 },
@@ -87,7 +87,8 @@ test("5.5: lifecycle boundaries, changed source lanes and stale completion canno
 
 test("5.5: an uncaptured or ineligible source breaks consecutive query credit", () => {
   const s = source();
-  for (const interruption of [undefined, { ...s, retention: "none" }, { ...s, reasoning: "high" }]) {
+  const thinking = { ...s, reasoning: "high", requestOptions: { ...s.requestOptions, reasoning: "high" }, thinkingOptions: { effort: "high" } };
+  for (const interruption of [undefined, { ...s, retention: "none" }, thinking]) {
     const c = new CacheWarmingCoordinator({ qualified: QUALIFIED_5_5 });
     publish(c, s);
     const incomplete = c.begin(s.owner);

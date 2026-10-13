@@ -13,7 +13,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"];
-// Mirrors the refresh query in src/cache-warming.ts (flag settings, hooks, thinking).
+// Mirrors the refresh query in src/cache-warming.ts (flag settings, hooks, thinking
+// options, thinking-display with effort, one-token output env).
 const REFRESH_FLAGS = { disableAllHooks: true, autoMemoryEnabled: false, includeGitInstructions: false, claudeMdExcludes: ["/**"] };
 
 function sse(model) {
@@ -27,7 +28,7 @@ function sse(model) {
 		+ event("message_stop", {});
 }
 
-async function arm(name, refresh, extra = {}, { nonessential = false } = {}) {
+async function arm(name, refresh, extra = {}, { nonessential = false, model = "claude-haiku-4-5", thinking = { thinking: { type: "disabled" } } } = {}) {
 	const root = mkdtempSync(join(tmpdir(), `warming-settings-${name}-`));
 	const home = join(root, "home"), config = join(home, ".claude"), cwd = join(root, "project"), markers = join(root, "markers"), bin = join(root, "bin");
 	for (const dir of [config, cwd, markers, bin]) mkdirSync(dir, { recursive: true });
@@ -56,13 +57,15 @@ async function arm(name, refresh, extra = {}, { nonessential = false } = {}) {
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 	try {
 		const q = query({ prompt: "Synthetic settings fixture.", options: {
-			cwd, model: "claude-haiku-4-5", tools: [], strictMcpConfig: true, maxTurns: 1, persistSession: false,
+			cwd, model, tools: [], strictMcpConfig: true, maxTurns: 1, persistSession: false,
 			permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
-			...(refresh ? { settings: REFRESH_FLAGS, hooks: {}, thinking: { type: "disabled" } } : {}),
+			...(refresh ? { settings: REFRESH_FLAGS, hooks: {}, ...thinking,
+				...("effort" in thinking ? { extraArgs: { "thinking-display": "summarized" } } : {}) } : {}),
 			env: { PATH: `${bin}:${process.env.PATH}`, HOME: home, TMPDIR: root, CLAUDE_CONFIG_DIR: config,
 				HTTPS_PROXY: `http://127.0.0.1:${server.address().port}`, NO_PROXY: "127.0.0.1",
 				ANTHROPIC_API_KEY: "offline-fake-key-not-a-secret", ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.address().port}`,
-				...(nonessential ? {} : { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" }), CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1", CLAUDE_CODE_MAX_RETRIES: "0" },
+				...(nonessential ? {} : { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" }), CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1", CLAUDE_CODE_MAX_RETRIES: "0",
+				...(refresh ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "1" } : {}) },
 		} });
 		let result;
 		for await (const message of q) if (message.type === "result") { result = message; break; }
@@ -98,6 +101,33 @@ test("refresh flag settings suppress user hooks and user MAX_THINKING_TOKENS", {
 	assert.ok(refresh.models.length >= 1);
 	assert.deepEqual(refresh.fired, [], "refresh flag settings must suppress every user hook and statusLine");
 	assert.equal(refresh.models.filter(thinkingOn).length, 0, "refresh wire must not enable thinking");
+});
+
+// Opus 5.5 refreshes replay thinking-enabled options instead of forcing thinking off
+// (OPUS_5_5_THINKING_LANES). There user MAX_THINKING_TOKENS is value-dependent, not
+// inert by name, so isolatedSource in src/cache-warming.ts refuses it on these lanes.
+test("user MAX_THINKING_TOKENS is not inert on thinking-enabled Opus 5.5 refresh lanes", { timeout: 240_000 }, async t => {
+	for (const thinking of [{}, { effort: "high" }]) {
+		const lane = JSON.stringify(thinking);
+		const options = { model: "claude-opus-5-5[1m]", thinking };
+		const baseline = await arm("opus-noenv", true, { env: { MAX_THINKING_TOKENS: undefined } }, options);
+		const budget = await arm("opus-2048", true, {}, options);
+		const zero = await arm("opus-0", true, { env: { MAX_THINKING_TOKENS: "0" } }, options);
+		const shape = run => JSON.stringify(run.models.map(({ thinking, max_tokens, output_config }) => ({ thinking, max_tokens, output_config })));
+		t.diagnostic(`${lane}: baseline=${shape(baseline)} 2048=${shape(budget)} 0=${shape(zero)}`);
+		for (const run of [baseline, budget, zero]) {
+			assert.equal(run.result?.subtype, "success", lane);
+			assert.ok(run.models.length >= 1, lane);
+			for (const body of run.models) {
+				assert.equal(body.max_tokens, 1, `${lane}: refresh output stays one token`);
+				assert.equal(body.thinking?.budget_tokens, undefined, `${lane}: no thinking budget on the wire`);
+			}
+		}
+		assert.ok(baseline.models.every(body => body.thinking?.type === "adaptive"), `${lane}: baseline replays adaptive thinking`);
+		assert.deepEqual(budget.wire, baseline.wire, `${lane}: a positive budget leaves the wire unchanged`);
+		assert.equal(zero.models.filter(thinkingOn).length, 0, `${lane}: MAX_THINKING_TOKENS=0 switches thinking off`);
+		assert.notDeepEqual(zero.wire, baseline.wire, lane);
+	}
 });
 
 // Settings keys a user's file may carry. Each is inert for a refresh only if adding

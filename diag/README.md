@@ -29,6 +29,7 @@ helpers; keep those dependencies. The package does not ship this directory.
 | What request prefix actually changed? | [capture-proxy.mjs](capture-proxy.mjs), [diff-captures.mjs](diff-captures.mjs) | Live forwarding/raw captures versus comparison of existing captures. |
 | Do git or dynamic preset sections change caching? | [probe-git-cache.mjs](probe-git-cache.mjs), [probe-dynamic-sections.mjs](probe-dynamic-sections.mjs) | Manual live experiments; repository mutation, not routine tests. |
 | What context window does the service report? | [context-size.mjs](context-size.mjs), [CONTEXT-SIZE.md](CONTEXT-SIZE.md) | Live model measurement; saved-report comparison is a separate mode. |
+| Does a one-token refresh keep a thinking-on Opus cache warm? | [probe-opus-thinking-refresh.mjs](probe-opus-thinking-refresh.mjs) | Live direct-SDK mechanism probe; run through capture-proxy. Not a qualification. |
 | Which built-in plugins does the CLI load for this login? | [probe-builtin-plugins.mjs](probe-builtin-plugins.mjs) | Uses the real login; sends no user message, so no model request. |
 | Which query/account state owns logged usage? | [attrib.py](attrib.py), [EXTRA-USAGE-400.md](EXTRA-USAGE-400.md) | Investigation-specific attribution and historical findings. |
 
@@ -41,7 +42,7 @@ helpers; keep those dependencies. The package does not ship this directory.
 ## Sealed qualification experiments
 
 Bounded `probe-five-*`, `probe-native-cache-account.mjs`,
-`qualify-native-cache-warming.mjs`, `probe-cache-warming.mjs` and their associated
+`qualify-native-cache-warming.mjs`, `qualify-opus-thinking-warming.mjs`, `probe-cache-warming.mjs` and their associated
 helpers/tests retain their existing paths. Completed/failed allocations are closed;
 old markers or unused slots never authorize reruns. New live work needs separately
 approved scope. See the qualification report before using an entry point.

@@ -13,12 +13,12 @@ const usageKeys = ["input_tokens", "output_tokens", "cache_read_input_tokens", "
 const selectUsage = value => Object.fromEntries(usageKeys.filter(key => typeof value?.[key] === "number").map(key => [key, value[key]]));
 // OFFLINE source-derived static contract simulation, not runtime qualification.
 const subscription = { subscriptionType: "Claude Max", apiProvider: "firstParty" };
-function simulatedResponse(body, refresh, id, followup, warmed) {
+function simulatedResponse(body, refresh, id, followup, warmed, servedModel = `${body.model}-20251001`) {
 	const usage = { input_tokens: 7, output_tokens: 1, cache_read_input_tokens: followup ? (warmed ? 2080 : 0) : refresh ? 2080 : 2048,
 		cache_creation_input_tokens: followup ? (warmed ? 0 : 2080) : refresh ? 0 : 32 };
 	const event = (type, value) => `event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`;
 	// Like the live API (native-cache-haiku.live): alias requests are served under a dated snapshot id.
-	return event("message_start", { message: { id: `msg_offline_qualification_${id}`, type: "message", role: "assistant", content: [], model: `${body.model}-20251001`, stop_reason: null, stop_sequence: null, usage } })
+	return event("message_start", { message: { id: `msg_offline_qualification_${id}`, type: "message", role: "assistant", content: [], model: servedModel, stop_reason: null, stop_sequence: null, usage } })
 		+ event("content_block_start", { index: 0, content_block: { type: "text", text: "" } })
 		+ event("content_block_delta", { index: 0, delta: { type: "text_delta", text: "K" } })
 		+ event("content_block_stop", { index: 0 })
@@ -31,13 +31,15 @@ function readUsage(text) {
 	assert.ok(start && delta, "provider usage missing");
 	return { usage: { ...selectUsage(start.message.usage), ...selectUsage(delta.usage) }, stop: delta.delta.stop_reason, servedModel: start.message.model };
 }
-export function wireEvidence(body) {
+const thinkingOff = body => assert.ok(!body.thinking || body.thinking.type === "disabled", "wire thinking enabled");
+export function wireEvidence(body, wireThinking = thinkingOff) {
 	const ttl = [];
 	JSON.stringify(body, (key, value) => { if (key === "cache_control") ttl.push(value.ttl ?? "5m"); return value; });
 	assert.ok(ttl.length && ttl.every(value => value === "5m"), "five-minute wire TTL missing");
-	assert.ok(!body.thinking || body.thinking.type === "disabled", "wire thinking enabled");
+	wireThinking(body);
 	assert.ok(body.tools?.some(tool => tool.name.endsWith("__sentinel")), "sentinel missing");
-	return { model: body.model, maxTokens: body.max_tokens, ttl, thinkingOff: true,
+	return { model: body.model, maxTokens: body.max_tokens, ttl, thinkingOff: wireThinking === thinkingOff,
+		thinking: body.thinking ?? null, effort: body.output_config?.effort ?? null,
 		system: hash(body.system), tools: hash(stripCache(body.tools)), messages: body.messages.map(message => hash(stripCache(message))), bodyHash: hash(body) };
 }
 const hopHeaders = headers => {
@@ -62,7 +64,7 @@ function forward(req, raw, signal) {
 		upstream.on("error", reject); upstream.end(raw);
 	});
 }
-export async function observeSdk({ offline, rpc, preflight, evidenceAccount, onFatal, offlineFault, deadlineAt }) {
+export async function observeSdk({ offline, rpc, preflight, evidenceAccount, onFatal, offlineFault, deadlineAt, wireThinking, simulatedServedModel }) {
 	assert.equal(typeof offline, "boolean");
 	assert.ok(offline || offlineFault === undefined);
 	const records = [], controller = new AbortController();
@@ -81,7 +83,7 @@ export async function observeSdk({ offline, rpc, preflight, evidenceAccount, onF
 			const chunks = []; let size = 0;
 			for await (const chunk of req) { size += chunk.length; assert.ok(size <= 2_000_000, "oversized synthetic request"); chunks.push(chunk); }
 			const raw = Buffer.concat(chunks), body = JSON.parse(raw);
-			record.wire = wireEvidence(body);
+			record.wire = wireEvidence(body, wireThinking);
 			assert.equal(body.model, record.cliModel.replace(/\[1m\]$/, ""), "unexpected request model");
 			if (record.refresh) assert.equal(body.max_tokens, 1);
 			await rpc("observe", { id: record.id, evidence: { stage: "wire", wire: record.wire } });
@@ -94,7 +96,7 @@ export async function observeSdk({ offline, rpc, preflight, evidenceAccount, onF
 					res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "offline simulated upstream failure" } }));
 					return;
 				}
-				const text = simulatedResponse(body, record.refresh, record.id, !record.refresh && records.filter(row => !row.refresh).length > 1, records.some(row => row.refresh));
+				const text = simulatedResponse(body, record.refresh, record.id, !record.refresh && records.filter(row => !row.refresh).length > 1, records.some(row => row.refresh), simulatedServedModel);
 				record.provider = readUsage(text);
 				await rpc("observe", { id: record.id, evidence: { stage: "response", status: 200, provider: record.provider } });
 				record.phase = "responded";

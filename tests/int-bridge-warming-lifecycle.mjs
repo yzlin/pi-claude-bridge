@@ -40,9 +40,10 @@ if (!scenario) {
 	const recovery = scenario === "prefix-miss-recovery";
 	const failedRefresh = recovery || scenario === "refresh-tool-use";
 	const newWork = scenario === "account-new-work" || recovery;
-	const expectedQueries = newWork ? 4 : parked || failedRefresh ? 2 : 1;
+	const thinking = scenario === "thinking-source";
+	const expectedQueries = newWork ? 4 : parked || failedRefresh || thinking ? 2 : 1;
 	const expectedRequests = recovery ? 4 : scenario === "account-new-work" || scenario === "refresh-tool-use" ? 3
-		: scenario === "account-release" || toolCycle ? 2 : 1;
+		: scenario === "account-release" || toolCycle || thinking ? 2 : 1;
 	const h = await bridgeSdkHarness({ sourceToolCycle: toolCycle, maxQueries: expectedQueries, maxModelRequests: scenario === "account-settings" ? 2 : expectedRequests,
 		simulateSubscription: scenario !== "api-key", parkFirstRefreshAccount: parked,
 		firstRefreshResponse: recovery ? "prefix-miss" : scenario === "refresh-tool-use" ? "tool-use" : "normal" });
@@ -142,10 +143,11 @@ if (!scenario) {
 		assert.equal(h.requests.length, sourceRequests); assert.equal(h.queries.length, 1);
 		assert.equal(warming.accountEvidence(h.actualAccounts[0]).eligible, false, "actual fake-key account must independently fail eligibility");
 		const snapshot = coordinator.snapshot();
-		if (scenario === "thinking-source") {
-			assert.equal(snapshot, undefined, "thinking-enabled source must not publish warming authority");
-			assert.notDeepEqual(h.queries[0].options.thinking, { type: "disabled" });
-		} else {
+		{
+			if (thinking) {
+				assert.equal(h.queries[0].options.effort, "low"); assert.equal(Object.hasOwn(h.queries[0].options, "thinking"), false);
+				assert.deepEqual(snapshot?.thinkingOptions, { effort: "low" }, "thinking source publishes its actual thinking options");
+			}
 			assert.ok(snapshot, "ordinary completion must publish the actual source");
 			assert.equal(snapshot.owner, provider.streamSimple); assert.deepEqual(snapshot.context, context);
 			assert.deepEqual(snapshot.requestOptions, options); assert.ok(Object.isFrozen(snapshot.context));
@@ -271,6 +273,11 @@ if (!scenario) {
 				assert.equal(results.at(-1).stopReason, "stop", results.at(-1).errorMessage);
 				assertAccounting();
 			}
+		} else if (thinking) {
+			startNative(); await tickNative();
+			assert.deepEqual(decisions, [{ action: "warm" }]);
+			assert.equal(results.at(-1).stopReason, "stop", results.at(-1).errorMessage);
+			assertAccounting();
 		} else if (scenario === "admission-tool-cycle") {
 			await reserved(); // no decision/consent even after successful source publication
 			eventContext.thinkingLevel = "low";
@@ -290,11 +297,12 @@ if (!scenario) {
 		assert.equal(h.requests.length, expectedRequests);
 		for (const refresh of h.queries.filter(query => query.refresh)) {
 			assert.ok(refresh.attempts <= 1); assert.equal(refresh.options.persistSession, false);
-			assert.deepEqual(refresh.options.thinking, { type: "disabled" });
+			assert.deepEqual(refresh.options.thinking, thinking ? undefined : { type: "disabled" });
+			assert.equal(refresh.options.effort, thinking ? "low" : undefined);
 			assert.deepEqual(refresh.options.tools, []); assert.deepEqual(refresh.options.hooks, {});
 			for (const request of refresh.requests) assert.equal(request.max_tokens, 1);
 		}
-		if (!parked && !recovery) assert.equal(entries.length, 0);
+		if (!parked && !recovery && !thinking) assert.equal(entries.length, 0);
 		assert.equal(toolExecutions.length, toolCycle ? 1 : 0);
 		assert.deepEqual(transcripts(), sourceBytes, "maintenance must not mutate source or persist forks");
 		assert.deepEqual(context, originalContext); assert.equal(existsSync(marker), false);

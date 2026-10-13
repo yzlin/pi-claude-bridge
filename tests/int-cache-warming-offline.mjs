@@ -185,7 +185,7 @@ test("offline warming prerequisite: withheld prompt, real SDK metadata and budge
 			const model = { id: MODEL, provider: "claude-bridge", baseUrl: "claude-bridge" };
 			const runtime = { effective: { autoMemoryEnabled: false, disableAllHooks: true }, sources: [] };
 			const snapshot = {
-				owner: "offline-gate", model, cliModel: MODEL, retention: "short", sessionId: source.init.session_id,
+				owner: "offline-gate", model, cliModel: MODEL, retention: "short", sessionId: source.init.session_id, thinkingOptions: { thinking: { type: "disabled" } },
 				requestOptions: { sessionId: "synthetic-pi-session" },
 				context: { messages: [{ role: "user", content: PROMPT, timestamp: 1 }], tools: [] },
 				prompt: PROMPT, systemPrompt: "Inert synthetic system for an offline SDK contract.",
