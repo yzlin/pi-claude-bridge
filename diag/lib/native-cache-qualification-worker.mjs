@@ -103,7 +103,7 @@ async function initialize({ offline, model: modelId, nonce, cwd, offlineFault, d
 	activate({ on(name, handler) { const list = handlers.get(name) ?? []; list.push(handler); handlers.set(name, list); }, registerProvider(_id, config) { provider = config; } });
 	assert.equal(provider.streamSimple, bridge.streamClaudeAgentSdk);
 	// Production plugin switch-off learns ids at session start; give it the same start.
-	for (const handler of handlers.get("session_start") ?? []) handler({ reason: "startup" }, { ui: undefined, mode: "print" });
+	for (const handler of handlers.get("session_start") ?? []) handler({ reason: "startup" }, { ui: undefined, mode: "print", cwd, sessionManager: { getSessionId: () => nonce } });
 	await delay(1000);
 	const registered = provider.models.find(model => model.id === modelId);
 	assert.ok(registered, "cohort model absent");
@@ -118,7 +118,7 @@ async function initialize({ offline, model: modelId, nonce, cwd, offlineFault, d
 	const options = { cacheRetention: "short", sessionId: nonce };
 	const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 	const piVersion = JSON.parse(readFileSync(join(dirname(piDist), "package.json"), "utf8")).version;
-	assert.equal(piVersion, "0.99.1"); // the user's installed Pi; its cache-warmer.js is byte-identical to 0.87.1's
+	assert.equal(piVersion, "1.2.0"); // the repo's dev Pi; its cache-warmer.js is byte-identical to 0.99.1's (qualified) and 0.87.1's
 	const nativeModule = pathToFileURL(join(piDist, "core/cache-warmer.js"));
 	const { CacheWarmer } = await import(nativeModule.href);
 	let sourceResult, snapshot, sourceWire, initialContext, initialFiles, initialBytes;

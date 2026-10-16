@@ -1,4 +1,4 @@
-// OFFLINE ONLY: actual registered provider and Pi summary takeovers, actual SDK wire.
+// OFFLINE ONLY: actual registered provider and Pi's native summarizers, actual SDK wire.
 // node --import tsx --import ./tests/lib/setup.mjs --test tests/int-cache-policy-sdk.mjs
 import { test } from "node:test";
 import { execFile } from "node:child_process";
